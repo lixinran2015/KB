@@ -5,6 +5,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 import streamlit as st
 from packages.adapters.mock_adapter import MockAdapter
 from packages.engines.trigger_engine import TriggerEngine, TriggerStateMachine
+from packages.engines.watchlist_manager import WatchlistManager
 from packages.domain.database import get_session
 from packages.domain.models import TriggerEvent
 
@@ -51,6 +52,34 @@ if events:
                 st.caption(f"影响: {ev.impact_score or 'N/A'}")
 else:
     st.info("暂无事件触发器，请在下方添加")
+
+# ── 事件影响地图 ──
+wm = WatchlistManager()
+wls = wm.list_watchlists()
+watchlist_codes = set()
+for wl in wls:
+    for item in wm.get_items(wl.id):
+        watchlist_codes.add(item.stock_code)
+
+if events and watchlist_codes:
+    st.markdown("---")
+    st.subheader("🗺️ 事件影响地图")
+    st.caption("影响关注清单中的股票")
+
+    for ev in events:
+        if not ev.related_stocks:
+            continue
+        related = [s.strip() for s in ev.related_stocks.split(",") if s.strip()]
+        affected = [code for code in related if code in watchlist_codes]
+        if affected:
+            impact_emoji = "🔴" if (ev.impact_score or 5) >= 7 else ("🟡" if (ev.impact_score or 5) >= 4 else "🟢")
+            with st.container():
+                cols = st.columns([2, 3])
+                with cols[0]:
+                    st.markdown(f"{impact_emoji} **{ev.name}**")
+                with cols[1]:
+                    for code in affected:
+                        st.markdown(f"  - `{code}`", unsafe_allow_html=True)
 
 st.markdown("---")
 
