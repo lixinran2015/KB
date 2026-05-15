@@ -14,6 +14,7 @@ from packages.engines.scoring_engine import ScoringEngine
 from packages.engines.watchlist_manager import WatchlistManager
 from packages.adapters.akshare_adapter import AKShareAdapter
 from packages.adapters.mock_adapter import MockAdapter
+from packages.adapters.tushare_industry_adapter import TushareIndustryAdapter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -143,6 +144,42 @@ def cmd_score(segment: str = None):
         print(f"{s['code']} {s['name']}: {result.total_score} ({result.status})")
 
 
+def cmd_enrich_industry(industry_key: str, dry_run: bool = True):
+    """Fetch industry chain stocks from Tushare concept boards."""
+    try:
+        adapter = TushareIndustryAdapter()
+    except ValueError as e:
+        logger.error(f"{e}")
+        logger.info("Set TUSHARE_TOKEN env var or register at tushare.pro")
+        sys.exit(1)
+    except ImportError:
+        logger.error("tushare not installed; run: pip install tushare")
+        sys.exit(1)
+
+    logger.info(f"Fetching concept stocks for industry: {industry_key}")
+    results = adapter.enrich_industry(industry_key)
+
+    total = sum(len(v) for v in results.values())
+    logger.info(f"Found {total} stocks across {len(results)} segments")
+
+    for seg_name, stocks in results.items():
+        print(f"\n【{seg_name}】({len(stocks)}只)")
+        for s in stocks[:10]:
+            print(f"  {s['code']} {s['name']}")
+        if len(stocks) > 10:
+            print(f"  ... 还有 {len(stocks) - 10} 只")
+
+    if not dry_run:
+        new_entries = adapter.build_stocks_config(industry_key)
+        logger.info(f"Would add {len(new_entries)} new stocks to stocks.yml")
+        for e in new_entries[:5]:
+            print(f"  + {e['code']} {e['name']} ({e['segment']})")
+        if len(new_entries) > 5:
+            print(f"  ... 还有 {len(new_entries) - 5} 只")
+    else:
+        logger.info("Dry-run mode. Use --apply to add to stocks.yml")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stock KB CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -155,6 +192,10 @@ def main():
 
     score_parser = subparsers.add_parser("score", help="Run scoring")
     score_parser.add_argument("--segment", help="Filter by segment")
+
+    enrich_parser = subparsers.add_parser("enrich-industry", help="Fetch stocks from Tushare concept boards")
+    enrich_parser.add_argument("--industry", choices=["ai", "robot"], default="ai", help="Industry to enrich")
+    enrich_parser.add_argument("--apply", action="store_true", help="Apply changes to stocks.yml (default: dry-run)")
 
     args = parser.parse_args()
 
@@ -170,6 +211,8 @@ def main():
         cmd_rollback()
     elif args.command == "score":
         cmd_score(args.segment)
+    elif args.command == "enrich-industry":
+        cmd_enrich_industry(args.industry, dry_run=not args.apply)
     else:
         parser.print_help()
         sys.exit(1)
