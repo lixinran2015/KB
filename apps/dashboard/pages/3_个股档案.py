@@ -3,6 +3,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 import streamlit as st
+from datetime import datetime, timedelta
 import pandas as pd
 import plotly.graph_objects as go
 from packages.config.loader import load_stocks
@@ -169,6 +170,16 @@ if result.status == "OK":
                 qual_data.append({"指标": "当前渗透率", "数值": f"{qs.current_penetration:.0%}"})
             if qual_data:
                 st.dataframe(pd.DataFrame(qual_data), width='stretch', hide_index=True)
+
+            # Stale data warning
+            if qs.last_updated:
+                try:
+                    updated = datetime.strptime(str(qs.last_updated), "%Y-%m-%d")
+                    days_old = (datetime.now() - updated).days
+                    if days_old > 90:
+                        st.warning(f"⚠️ 定性评分已 {days_old} 天未更新，建议复核")
+                except ValueError:
+                    pass
 
 else:
     st.warning(f"⚠️ {result.message}")

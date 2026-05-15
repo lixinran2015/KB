@@ -11,16 +11,31 @@ st.title("📊 Stock KB 首页")
 
 init_db()
 
+# Dynamic metrics
+from packages.domain.database import get_session
+from packages.domain.models import StockFinancial, ScoreResult
+
+session = get_session()
+try:
+    latest_period = session.query(StockFinancial.report_period).distinct().order_by(StockFinancial.report_period.desc()).first()
+    latest_period = latest_period[0] if latest_period else "未同步"
+    score_count = session.query(ScoreResult).count()
+finally:
+    session.close()
+
+wm = WatchlistManager()
+wls = wm.list_watchlists()
+
 # Data health status
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("财务数据", "2024Q1", "已同步")
+    st.metric("财务数据", latest_period, "已同步")
 with col2:
     st.metric("股票数量", len(load_stocks()))
 with col3:
-    st.metric("关注组合", 0)
+    st.metric("关注组合", len(wls))
 with col4:
-    st.metric("缓存命中", "--")
+    st.metric("评分记录", score_count)
 
 st.markdown("---")
 
@@ -43,12 +58,6 @@ st.markdown("---")
 
 # Watchlists
 st.subheader("📁 我的关注清单")
-wm = WatchlistManager()
-wls = wm.list_watchlists()
-
-# Update metric
-if wls:
-    st.session_state["watchlist_count"] = len(wls)
 
 if not wls:
     st.info("暂无关注清单，请在左侧导航栏进入“关注清单”页面创建")
