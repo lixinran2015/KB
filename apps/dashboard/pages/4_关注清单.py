@@ -10,6 +10,7 @@ from packages.engines.watchlist_manager import WatchlistManager
 from packages.engines.scoring_engine import ScoringEngine
 from packages.engines.valuation_engine import ValuationEngine
 from packages.config.loader import load_stocks
+from packages.domain.database import get_latest_financial
 from packages.adapters.akshare_adapter import AKShareAdapter
 from packages.adapters.mock_adapter import MockAdapter
 
@@ -103,6 +104,10 @@ for i, wl in enumerate(wls):
                 except Exception:
                     val_rating = None
 
+                # Crowdedness
+                fin = get_latest_financial(item.stock_code)
+                fund_pct = fin.fund_hold_pct if fin else None
+
                 rows.append({
                     "股票代码": item.stock_code,
                     "名称": s.get("name", "?"),
@@ -110,6 +115,7 @@ for i, wl in enumerate(wls):
                     "状态": item.status,
                     "评分": total_score,
                     "估值": val_rating,
+                    "拥挤度": fund_pct,
                 })
 
             df = pd.DataFrame(rows)
@@ -130,6 +136,9 @@ for i, wl in enumerate(wls):
                 display_df["评分"] = display_df["评分"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "N/A")
                 display_df["估值"] = display_df["估值"].apply(
                     lambda x: {"cheap": "🟢 低估", "fair": "🟡 合理", "expensive": "🔴 高估"}.get(x, "N/A")
+                )
+                display_df["拥挤度"] = display_df["拥挤度"].apply(
+                    lambda x: f"🔴 {x:.1%}" if pd.notna(x) and x > 0.15 else (f"{x:.1%}" if pd.notna(x) else "N/A")
                 )
                 st.dataframe(display_df, width='stretch', hide_index=True)
 

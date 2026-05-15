@@ -102,9 +102,49 @@ class TriggerEngine:
                     "description": f"收盘价 {float(close):.2f} > 250日均线 {float(ma_250):.2f}",
                 })
 
+        # Sector strength: check if stock's segment is in top 3 by momentum
+        segment = row.get("segment")
+        if segment and self._check_sector_strength(segment):
+            triggers.append({
+                "id": "sector_strength_top3",
+                "name": "板块强度前三",
+                "category": "sector",
+                "priority": "medium",
+                "description": f"所在板块 '{segment}' 涨幅排名进入前三",
+            })
+
         return TriggerResult(
             stock_code=stock_code,
             report_period=report_period,
             status="OK",
             triggers=triggers,
         )
+
+    def _check_sector_strength(self, segment: str) -> bool:
+        """Check if segment is in top 3 by momentum."""
+        try:
+            import akshare as ak
+            # Fetch concept board spot data to determine relative strength
+            df = ak.stock_board_concept_spot_em()
+            if df.empty or "相关板块" not in df.columns:
+                return False
+            # Map our segment names to concept board names heuristically
+            segment_keywords = {
+                "光模块": ["光模块", "CPO", "光通信"],
+                "GPU/ASIC芯片": ["芯片", "半导体", "GPU"],
+                "服务器": ["服务器", "算力", "数据中心"],
+                "机器人": ["机器人", "人形机器人"],
+                "减速器": ["减速器", "机器人"],
+            }
+            keywords = segment_keywords.get(segment, [segment])
+            for kw in keywords:
+                mask = df["相关板块"].astype(str).str.contains(kw, na=False, case=False)
+                matched = df[mask]
+                if not matched.empty:
+                    # Check if any matched board is in top 3 by 涨跌幅
+                    df_sorted = df.sort_values("涨跌幅", ascending=False).head(3)
+                    if not matched.merge(df_sorted, on="相关板块").empty:
+                        return True
+            return False
+        except Exception:
+            return False

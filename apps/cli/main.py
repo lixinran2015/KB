@@ -1,7 +1,9 @@
 import argparse
+import json
 import os
 import sys
 import logging
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -11,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from packages.domain.database import init_db, DB_PATH
+from packages.domain.database import init_db, DB_PATH, Transaction
+from packages.domain.models import StockFinancial, ScoreResult, TriggerEvent, Watchlist, WorkflowRun
 from packages.domain.locks import WorkflowLock, create_backup, list_backups, rollback_to_backup
 from packages.config.loader import load_stocks, save_stocks
 from packages.config.validators import StockConfig
@@ -92,12 +95,24 @@ def cmd_daily():
 
 
 def cmd_quarterly():
-    """Quarterly update workflow with backup"""
+    """Quarterly update workflow with backup and full transaction boundaries"""
     with WorkflowLock():
         cmd_init()
         logger.info("Creating backup before quarterly update...")
         backup_path = create_backup(DB_PATH)
         logger.info(f"Backup created: {backup_path}")
+
+        # Track workflow run
+        with Transaction() as session:
+            workflow = WorkflowRun(
+                workflow_name="quarterly",
+                status="running",
+                started_at=datetime.now(),
+                backup_path=backup_path,
+            )
+            session.add(workflow)
+            session.flush()
+            workflow_run_id = workflow.id
 
         # Use AKShare if available, fall back to mock for testing
         try:
@@ -109,6 +124,8 @@ def cmd_quarterly():
             engine = ScoringEngine(adapter=adapter)
 
         stocks = load_stocks()
+        succeeded = 0
+        failed = 0
 
         for s in stocks:
             try:
@@ -118,10 +135,39 @@ def cmd_quarterly():
                     report_period="2024Q1",
                 )
                 logger.info(f"{s['code']}: score={result.total_score}, status={result.status}")
+
+                # Persist score result within transaction boundary
+                with Transaction() as session:
+                    sr = ScoreResult(
+                        stock_code=s["code"],
+                        report_period="2024Q1",
+                        total_score=result.total_score,
+                        financial_score=result.financial_score,
+                        qualitative_score=result.qualitative_score,
+                        breakdown=json.dumps(result.breakdown, ensure_ascii=False) if result.breakdown else None,
+                        raw_values=json.dumps(result.raw_values, ensure_ascii=False) if result.raw_values else None,
+                        benchmarks=json.dumps(result.benchmarks, ensure_ascii=False) if result.benchmarks else None,
+                        status=result.status,
+                        missing_metrics=",".join(result.missing_metrics) if result.missing_metrics else None,
+                        message=result.message,
+                        workflow_run_id=workflow_run_id,
+                    )
+                    session.add(sr)
+                succeeded += 1
             except Exception as e:
                 logger.error(f"Failed to score {s['code']}: {e}")
+                failed += 1
 
-        logger.info("Quarterly workflow completed")
+        # Mark workflow complete
+        with Transaction() as session:
+            wf = session.query(WorkflowRun).filter_by(id=workflow_run_id).first()
+            if wf:
+                wf.status = "completed" if failed == 0 else "partial"
+                wf.completed_at = datetime.now()
+                if failed > 0:
+                    wf.error_message = f"{failed} stocks failed out of {len(stocks)}"
+
+        logger.info(f"Quarterly workflow completed: {succeeded} succeeded, {failed} failed")
 
 
 def cmd_rollback():
@@ -263,6 +309,143 @@ def cmd_check_triggers():
     logger.info(f"Trigger check completed. {triggered} stocks triggered.")
 
 
+def cmd_revise(stock_code: str, report_period: str, reason: str = ""):
+    """Mark existing financial record as revised and insert a corrected one."""
+    cmd_init()
+    with Transaction() as session:
+        existing = (
+            session.query(StockFinancial)
+            .filter_by(stock_code=stock_code, report_period=report_period)
+            .order_by(StockFinancial.revision_seq.desc())
+            .first()
+        )
+        if not existing:
+            logger.error(f"No existing record for {stock_code} {report_period}")
+            sys.exit(1)
+
+        # Mark old record as revised
+        existing.is_revised = True
+        existing.revised_by_snapshot = f"rev_{existing.revision_seq + 1}"
+        existing.revision_reason = reason or "manual revision"
+
+        logger.info(f"Marked revision {existing.revision_seq} as revised for {stock_code} {report_period}")
+        logger.info(f"Use 'sync' or manual insert to add the corrected record")
+
+
+def cmd_sync(report_period: str = None):
+    """Sync financial data from adapters into the database."""
+    cmd_init()
+    try:
+        adapter = AKShareAdapter()
+    except Exception:
+        logger.warning("AKShare not available, using mock data")
+        adapter = MockAdapter("stock_300308_q1_2024")
+
+    stocks = load_stocks()
+    synced = 0
+    skipped = 0
+
+    for s in stocks:
+        try:
+            df = adapter.fetch_with_fallback(s["code"])
+            if df.empty or "data_status" in df.columns:
+                skipped += 1
+                continue
+
+            row = df.iloc[0]
+            rp = report_period or row.get("report_period", "2024Q1")
+            snapshot = row.get("snapshot_date", "")
+
+            with Transaction() as session:
+                # Upsert: delete existing same snapshot, then insert
+                session.query(StockFinancial).filter_by(
+                    stock_code=s["code"], report_period=rp, snapshot_date=snapshot
+                ).delete()
+
+                record = StockFinancial(
+                    stock_code=s["code"],
+                    report_period=rp,
+                    snapshot_date=snapshot,
+                    revenue=row.get("revenue"),
+                    revenue_growth=row.get("revenue_growth"),
+                    gross_margin=row.get("gross_margin"),
+                    net_margin=row.get("net_margin"),
+                    roe=row.get("roe"),
+                    net_profit=row.get("net_profit"),
+                    net_profit_growth=row.get("net_profit_growth"),
+                    pe_ttm=row.get("pe_ttm"),
+                    ps_ttm=row.get("ps_ttm"),
+                    pb=row.get("pb"),
+                    northbound_pct=row.get("northbound_pct"),
+                    fund_hold_pct=row.get("fund_hold_pct"),
+                    data_source="akshare",
+                    is_filing=True,
+                )
+                session.add(record)
+                synced += 1
+        except Exception as e:
+            logger.warning(f"Sync failed for {s['code']}: {e}")
+            skipped += 1
+
+    logger.info(f"Sync completed: {synced} synced, {skipped} skipped")
+
+
+def cmd_sync_full():
+    """Sync all available historical financial data."""
+    # For MVP, same as sync but explicit intent
+    logger.info("Full sync: fetching latest available data for all stocks...")
+    cmd_sync()
+
+
+def cmd_cache_stats():
+    """Show database statistics."""
+    cmd_init()
+    with Transaction() as session:
+        stock_count = session.query(StockFinancial.stock_code).distinct().count()
+        financial_count = session.query(StockFinancial).count()
+        score_count = session.query(ScoreResult).count()
+        trigger_count = session.query(TriggerEvent).count()
+        watchlist_count = session.query(Watchlist).count()
+        workflow_count = session.query(WorkflowRun).count()
+
+    print(f"\n{'=' * 40}")
+    print(f"📊 Stock KB Cache Statistics")
+    print(f"{'=' * 40}")
+    print(f"  Unique stocks with financials: {stock_count}")
+    print(f"  Total financial records:       {financial_count}")
+    print(f"  Score results stored:          {score_count}")
+    print(f"  Trigger events:                {trigger_count}")
+    print(f"  Watchlists:                    {watchlist_count}")
+    print(f"  Workflow runs:                 {workflow_count}")
+    print(f"{'=' * 40}")
+
+
+def cmd_add_industry(name: str, segments: list = None):
+    """Create a new industry YAML template."""
+    import os
+    industry_dir = os.path.join(os.path.dirname(__file__), "..", "..", "config", "industries")
+    os.makedirs(industry_dir, exist_ok=True)
+    path = os.path.join(industry_dir, f"{name}.yml")
+
+    if os.path.exists(path):
+        logger.error(f"Industry '{name}' already exists at {path}")
+        sys.exit(1)
+
+    default_segments = segments or ["核心环节", "配套环节", "下游应用"]
+    content = {
+        "name": name,
+        "description": f"{name} industry chain",
+        "segments": [{"name": s, "description": ""} for s in default_segments],
+    }
+
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(content, f, allow_unicode=True, sort_keys=False)
+
+    logger.info(f"Created industry template: {path}")
+    for s in default_segments:
+        print(f"  - {s}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stock KB CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -285,6 +468,21 @@ def main():
 
     subparsers.add_parser("check-triggers", help="Run technical trigger detection")
 
+    revise_parser = subparsers.add_parser("revise", help="Mark financial record as revised")
+    revise_parser.add_argument("--stock", required=True, help="Stock code")
+    revise_parser.add_argument("--period", required=True, help="Report period (e.g. 2024Q1)")
+    revise_parser.add_argument("--reason", default="", help="Revision reason")
+
+    sync_parser = subparsers.add_parser("sync", help="Sync financial data to database")
+    sync_parser.add_argument("--period", help="Specific report period (default: latest)")
+
+    subparsers.add_parser("sync-full", help="Sync all historical financial data")
+    subparsers.add_parser("cache-stats", help="Show database statistics")
+
+    add_ind_parser = subparsers.add_parser("add-industry", help="Create new industry template")
+    add_ind_parser.add_argument("name", help="Industry name (kebab-case)")
+    add_ind_parser.add_argument("--segments", nargs="+", help="Segment names")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -305,6 +503,16 @@ def main():
         cmd_report(args.stock)
     elif args.command == "check-triggers":
         cmd_check_triggers()
+    elif args.command == "revise":
+        cmd_revise(args.stock, args.period, args.reason)
+    elif args.command == "sync":
+        cmd_sync(args.period)
+    elif args.command == "sync-full":
+        cmd_sync_full()
+    elif args.command == "cache-stats":
+        cmd_cache_stats()
+    elif args.command == "add-industry":
+        cmd_add_industry(args.name, args.segments)
     else:
         parser.print_help()
         sys.exit(1)

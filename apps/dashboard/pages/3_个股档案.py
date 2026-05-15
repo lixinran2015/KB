@@ -6,7 +6,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from packages.config.loader import load_stocks
-from packages.domain.database import get_session
+from packages.domain.database import get_session, get_latest_financial
 from packages.domain.models import QualitativeScore
 from packages.engines.scoring_engine import ScoringEngine
 from packages.engines.valuation_engine import ValuationEngine
@@ -53,6 +53,11 @@ with col3:
     st.metric("风格", stock["style"])
 with col4:
     st.metric("估值评级", val_result.overall_rating or "N/A")
+
+# Crowdedness warning
+fin = get_latest_financial(stock["code"])
+if fin and fin.fund_hold_pct and fin.fund_hold_pct > 0.15:
+    st.error(f"🔴 拥挤度警告：公募基金持仓 {fin.fund_hold_pct:.1%}，超过 15% 阈值")
 
 if result.status == "OK":
     st.success(f"✅ 评分正常")
