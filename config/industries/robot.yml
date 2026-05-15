@@ -3,28 +3,60 @@ upstream:
   name: 核心零部件
   segments:
     - name: 减速器
+      value_chain_pct: 0.15
+      localization_rate: 0.30
       key_stocks: []
+      description: 谐波减速器、RV减速器，人形机器人核心传动部件
     - name: 伺服电机
+      value_chain_pct: 0.12
+      localization_rate: 0.50
       key_stocks: []
+      description: 高精度伺服电机及驱动系统
     - name: 传感器
+      value_chain_pct: 0.08
+      localization_rate: 0.35
       key_stocks: []
+      description: 六维力传感器、视觉传感器、触觉传感器
     - name: 丝杠
+      value_chain_pct: 0.05
+      localization_rate: 0.25
       key_stocks: []
+      description: 滚珠丝杠、行星滚柱丝杠，直线运动核心部件
+    - name: 控制器
+      value_chain_pct: 0.08
+      localization_rate: 0.40
+      key_stocks: []
+      description: 运动控制器、机器人大脑
 
 midstream:
   name: 本体制造
   segments:
     - name: 整机代工
+      value_chain_pct: 0.18
+      localization_rate: 0.70
       key_stocks: []
+      description: 工业机器人、协作机器人、人形机器人整机制造
     - name: 系统集成
+      value_chain_pct: 0.10
+      localization_rate: 0.80
       key_stocks: []
+      description: 机器人产线集成、行业解决方案
 
 downstream:
   name: 场景落地
   segments:
     - name: 工业制造
+      value_chain_pct: 0.15
+      localization_rate: 0.85
       key_stocks: []
+      description: 汽车、3C、锂电等工业场景应用
     - name: 医疗机器人
+      value_chain_pct: 0.05
+      localization_rate: 0.40
       key_stocks: []
+      description: 手术机器人、康复机器人
     - name: 家用服务机器人
+      value_chain_pct: 0.08
+      localization_rate: 0.75
       key_stocks: []
+      description: 扫地机器人、陪伴机器人、教育机器人
