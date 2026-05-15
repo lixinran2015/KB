@@ -36,5 +36,5 @@ class StockConfig(BaseModel):
     code: str = Field(..., pattern=r"^\d{6}\.(SZ|SH|BJ)$")
     name: str
     segment: str
-    style: str = Field(..., pattern=r"^(白马股|弹性小票|次新股)$")
-    market_cap_tier: str = Field(..., pattern=r"^(大盘|中盘|小盘)$")
+    style: str = Field(default="待分类", pattern=r"^(白马股|弹性小票|次新股|待分类)$")
+    market_cap_tier: str = Field(default="待分类", pattern=r"^(大盘|中盘|小盘|待分类)$")
