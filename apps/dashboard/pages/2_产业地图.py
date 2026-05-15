@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 from packages.config.loader import load_industry, load_stocks, save_stocks
 from packages.domain.database import get_session
-from packages.domain.models import ScoreResult, StockFinancial
+from packages.domain.models import ScoreResult, StockFinancial, StockIndustryKB, StockConceptRel, ConceptTag
 
 st.set_page_config(page_title="产业地图", layout="wide")
 
@@ -21,15 +21,120 @@ if "selected_segment" not in st.session_state:
 if "selected_layer" not in st.session_state:
     st.session_state.selected_layer = None
 
+# ── 机器人产业链 segment 匹配规则 ──
+# 优先级：从上到下，先匹配的先分配
+ROBOT_SEGMENT_RULES = [
+    # 上游：核心零部件（优先级从高到低，越具体的越靠前）
+    ("丝杠", {"concept": ["丝杠"], "desc": ["丝杠", "滚珠丝杠", "行星滚柱丝杠"]}),
+    ("减速器", {"concept": ["减速器"], "desc": ["减速器", "谐波减速", "RV减速", "行星减速", "谐波", "精密传动"]}),
+    ("控制器", {"concept": ["控制器"], "desc": ["控制器", "数控系统", "运动控制", "PLC", "控制产品", "可编程逻辑控制器"]}),
+    ("传感器", {"concept": ["传感器"], "desc": ["传感器", "力传感器", "视觉传感器", "触觉传感器", "机器视觉"]}),
+    ("伺服电机", {"concept": ["伺服", "电机电控"], "desc": ["伺服电机", "伺服系统", "伺服驱动", "伺服器"]}),
+    # 下游：场景应用
+    ("医疗机器人", {"concept": ["医疗机器人"], "desc": ["医疗机器人", "手术机器人", "康复机器人"]}),
+    ("家用服务机器人", {"concept": ["服务机器人"], "desc": ["服务机器人", "扫地机器人", "陪伴机器人", "教育机器人"]}),
+    ("整机代工", {"concept": ["工业机器人", "人形机器人"], "desc": ["工业机器人", "焊接机器人", "协作机器人", "人形机器人", "机器人整机"]}),
+    ("系统集成", {"concept": [], "desc": ["系统集成", "自动化解决方案", "智能制造系统", "智能工厂", "AGV", "AMR", "RGV", "移动机器人"]}),
+    ("工业制造", {"concept": ["工业机器人"], "desc": ["工业制造"]}),
+]
+
+
+def load_robot_stocks_from_db():
+    """从数据库加载机器人产业链相关股票，按 segment 分组。"""
+    session = get_session()
+    try:
+        # 1. 获取机器人相关概念标签的 stock_codes
+        robot_tag_names = [
+            "工业机器人", "服务机器人", "医疗机器人", "人形机器人",
+            "军用机器人", "机器人材料", "虚拟机器人", "减速器", "传感器", "伺服",
+        ]
+        robot_tags = session.query(ConceptTag).filter(ConceptTag.name.in_(robot_tag_names)).all()
+        robot_tag_ids = [t.id for t in robot_tags]
+
+        stock_codes = []
+        if robot_tag_ids:
+            stock_codes = [
+                r[0] for r in
+                session.query(StockConceptRel.stock_code)
+                .filter(StockConceptRel.concept_tag_id.in_(robot_tag_ids))
+                .distinct()
+                .all()
+            ]
+
+        # 2. 包含 L3 110 通用机械/机器人 下的所有 L4 子节点
+        #    1100 机器人 + 1101 数控机床 + 1102 工控设备 + 1103 仪器仪表
+        l3_110_codes = [
+            r[0] for r in
+            session.query(StockIndustryKB.stock_code)
+            .filter(StockIndustryKB.std_industry_id.in_([1100, 1101, 1102, 1103]))
+            .all()
+        ]
+
+        all_codes = list(set(stock_codes) | set(l3_110_codes))
+        if not all_codes:
+            return {}
+
+        # 3. 查询完整股票数据
+        stocks = session.query(StockIndustryKB).filter(StockIndustryKB.stock_code.in_(all_codes)).all()
+
+        # 4. 按规则分配到 segment
+        segment_map = {}
+        for stock in stocks:
+            concepts = [c.name for c in stock.concepts]
+            desc = stock.business_desc or ""
+
+            matched_seg = None
+            for seg_name, rules in ROBOT_SEGMENT_RULES:
+                # 概念标签匹配
+                for c in rules["concept"]:
+                    if c in concepts:
+                        matched_seg = seg_name
+                        break
+                if matched_seg:
+                    break
+
+                # 业务描述关键词匹配
+                for kw in rules["desc"]:
+                    if kw in desc:
+                        matched_seg = seg_name
+                        break
+                if matched_seg:
+                    break
+
+            if matched_seg:
+                segment_map.setdefault(matched_seg, []).append({
+                    "code": stock.stock_code,
+                    "name": stock.stock_name,
+                    "segment": matched_seg,
+                    "style": "待分类",
+                    "market_cap_tier": "待分类",
+                    "source": "db",
+                })
+
+        return segment_map
+    finally:
+        session.close()
+
+
 # ── 加载全局数据 ──
 all_stocks = load_stocks()
 
-# 构建 segment -> stocks 映射
+# 构建 segment -> stocks 映射（优先用 stocks.yml，再用数据库补充）
 segment_stock_map = {}
+
+# 1. 先加载 stocks.yml 中的股票
 for s in all_stocks:
     seg = s.get("segment", "")
     if seg:
         segment_stock_map.setdefault(seg, []).append(s)
+
+# 2. 从数据库加载机器人产业链股票并合并
+db_segment_map = load_robot_stocks_from_db()
+for seg, stocks in db_segment_map.items():
+    existing_codes = {s["code"] for s in segment_stock_map.get(seg, [])}
+    for s in stocks:
+        if s["code"] not in existing_codes:
+            segment_stock_map.setdefault(seg, []).append(s)
 
 # 获取最新评分数据
 latest_scores = {}
