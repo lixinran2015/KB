@@ -1,0 +1,38 @@
+# {{ stock.name }} ({{ stock.code }}) 个股报告
+
+> 生成时间: {{ generated_at }}
+> 报告期: {{ report_period }}
+
+## 评分卡
+
+| 指标 | 得分 | 原始值 |
+|------|------|--------|
+{% for name, score in score_breakdown.items() %}
+| {{ name }} | {{ score if score is not none else 'N/A' }} | {{ raw_values.get(name, 'N/A') }} |
+{% endfor %}
+
+**综合评分: {{ total_score if total_score is not none else 'N/A' }}** ({{ status }})
+
+## 估值
+
+| 指标 | 原始值 | 评级 |
+|------|--------|------|
+{% for name, rating in valuation_breakdown.items() %}
+| {{ name }} | {{ valuation_raw.get(name, 'N/A') }} | {{ rating if rating is not none else 'N/A' }} |
+{% endfor %}
+
+**综合估值: {{ overall_valuation if overall_valuation is not none else 'N/A' }}**
+
+<!-- MANUAL_SLOT:analysis -->
+<!-- 在此区域手动添加分析笔记，不会被自动覆盖 -->
+<!-- END_MANUAL_SLOT -->
+
+## 触发器
+
+{% if triggers %}
+{% for t in triggers %}
+- [{{ t.priority }}] {{ t.name }}: {{ t.description }}
+{% endfor %}
+{% else %}
+无触发事件
+{% endif %}
