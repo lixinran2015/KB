@@ -1,10 +1,14 @@
 import argparse
+import os
 import sys
 import logging
 from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from packages.domain.database import init_db, DB_PATH
 from packages.domain.locks import WorkflowLock, create_backup, list_backups, rollback_to_backup
