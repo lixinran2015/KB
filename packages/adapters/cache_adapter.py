@@ -26,7 +26,7 @@ class CacheAdapter:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO cache (stock_code, data, cached_at) VALUES (?, ?, ?)",
-                (stock_code, df.to_json().encode(), datetime.now()),
+                (stock_code, df.to_json().encode(), datetime.now().isoformat()),
             )
 
     def load(self, stock_code: str, max_age_hours: int = 24) -> pd.DataFrame | None:
