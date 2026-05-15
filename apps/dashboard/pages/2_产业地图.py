@@ -4,305 +4,260 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 import streamlit as st
-import plotly.graph_objects as go
 import pandas as pd
 from packages.config.loader import load_industry, load_stocks, save_stocks
+from packages.domain.database import get_session
+from packages.domain.models import ScoreResult, StockFinancial
 
 st.set_page_config(page_title="产业地图", layout="wide")
 
-st.title("🗺️ 产业地图")
+# ── 初始化 session state ──
+if "industry_view" not in st.session_state:
+    st.session_state.industry_view = "list"  # list | detail | stocks
+if "selected_industry_key" not in st.session_state:
+    st.session_state.selected_industry_key = None
+if "selected_segment" not in st.session_state:
+    st.session_state.selected_segment = None
+if "selected_layer" not in st.session_state:
+    st.session_state.selected_layer = None
 
-# ── 产业选择 ──
-col_selector, _ = st.columns([1, 3])
-with col_selector:
-    industry_choice = st.segmented_control(
-        "选择产业",
-        ["人工智能", "机器人"],
-        default="人工智能",
-    )
-if not industry_choice:
-    industry_choice = "人工智能"
-industry_key = "ai" if industry_choice == "人工智能" else "robot"
-industry = load_industry(industry_key)
-
-# ── 数据准备 ──
+# ── 加载全局数据 ──
 all_stocks = load_stocks()
+
+# 构建 segment -> stocks 映射
 segment_stock_map = {}
 for s in all_stocks:
     seg = s.get("segment", "")
     if seg:
         segment_stock_map.setdefault(seg, []).append(s)
 
-# Layer color scheme
+# 获取最新评分数据
+latest_scores = {}
+try:
+    session = get_session()
+    score_rows = (
+        session.query(ScoreResult.stock_code, ScoreResult.total_score)
+        .distinct(ScoreResult.stock_code)
+        .order_by(ScoreResult.stock_code, ScoreResult.scored_at.desc())
+        .all()
+    )
+    latest_scores = {r.stock_code: r.total_score for r in score_rows if r.total_score is not None}
+    session.close()
+except Exception:
+    pass
+
+# 获取最新财务数据（用于画像标签）
+latest_financials = {}
+try:
+    session = get_session()
+    fin_rows = (
+        session.query(StockFinancial)
+        .order_by(StockFinancial.stock_code, StockFinancial.snapshot_date.desc())
+        .all()
+    )
+    seen = set()
+    for f in fin_rows:
+        if f.stock_code not in seen:
+            latest_financials[f.stock_code] = f
+            seen.add(f.stock_code)
+    session.close()
+except Exception:
+    pass
+
+# ── 辅助函数 ──
+def get_segment_stats(seg_name):
+    """返回环节的股票列表、数量、平均评分"""
+    stocks = segment_stock_map.get(seg_name, [])
+    scores = [latest_scores.get(s["code"]) for s in stocks]
+    valid_scores = [s for s in scores if s is not None]
+    avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else None
+    return stocks, len(stocks), avg_score
+
+
+def get_stock_tags(stock_code, segment_stocks):
+    """计算股票画像标签列表"""
+    tags = []
+    fin = latest_financials.get(stock_code)
+    score = latest_scores.get(stock_code)
+
+    # 龙头：segment内评分最高前2
+    segment_scores = [(s["code"], latest_scores.get(s["code"], 0)) for s in segment_stocks]
+    segment_scores = sorted([x for x in segment_scores if x[1]], key=lambda x: x[1], reverse=True)
+    if segment_scores and stock_code == segment_scores[0][0]:
+        tags.append(("👑 龙头", "#f59e0b"))
+    elif len(segment_scores) > 1 and stock_code == segment_scores[1][0]:
+        tags.append(("🥈 龙二", "#f59e0b"))
+
+    # 中军：评分在 3.0~4.0 之间
+    if score and 3.0 <= score < 4.0:
+        tags.append(("🛡️ 中军", "#3b82f6"))
+
+    # 业绩增长
+    if fin:
+        if (fin.revenue_growth and fin.revenue_growth > 0.30) or \
+           (fin.net_profit_growth and fin.net_profit_growth > 0.30):
+            tags.append(("📈 业绩增长", "#10b981"))
+        # 业绩下滑
+        elif (fin.revenue_growth is not None and fin.revenue_growth < 0) or \
+             (fin.net_profit_growth is not None and fin.net_profit_growth < 0):
+            tags.append(("📉 业绩下滑", "#ef4444"))
+
+        # 高毛利优质
+        if fin.gross_margin and fin.gross_margin > 0.40:
+            tags.append(("💎 高毛利", "#8b5cf6"))
+
+        # 机构重仓
+        if fin.fund_hold_pct and fin.fund_hold_pct > 0.10:
+            tags.append(("🏦 机构重仓", "#06b6d4"))
+
+    # 高分白马
+    if score and score >= 4.5:
+        tags.append(("🦄 高分白马", "#10b981"))
+
+    return tags
+
+
+# ── 获取所有产业配置 ──
+INDUSTRIES = [
+    {"key": "ai", "name": "人工智能", "icon": "🤖"},
+    {"key": "robot", "name": "机器人", "icon": "🔧"},
+]
+
 LAYER_COLORS = {
-    "upstream": "#3b82f6",   # blue
-    "midstream": "#10b981",  # green
-    "downstream": "#f59e0b", # amber
+    "upstream": "#3b82f6",
+    "midstream": "#10b981",
+    "downstream": "#f59e0b",
 }
 LAYER_LABELS = {"upstream": "上游", "midstream": "中游", "downstream": "下游"}
+LAYER_ICONS = {"upstream": "🏔️", "midstream": "⚙️", "downstream": "🚀"}
 
-# ── 构建环节表格数据 ──
-table_rows = []
-for layer_key in ["upstream", "midstream", "downstream"]:
-    layer = industry.get(layer_key)
-    if not layer:
-        continue
-    layer_color = LAYER_COLORS.get(layer_key, "#9ca3af")
-    for segment in layer.get("segments", []):
-        seg_name = segment["name"]
-        stocks = segment_stock_map.get(seg_name, []) or segment.get("key_stocks", [])
-        stock_count = len(stocks)
-        table_rows.append({
-            "层级": LAYER_LABELS.get(layer_key, layer_key),
-            "层级色": layer_color,
-            "环节": seg_name,
-            "价值链占比": segment.get("value_chain_pct"),
-            "国产化率": segment.get("localization_rate"),
-            "标的数": stock_count,
-            "描述": segment.get("description", ""),
-            "股票列表": ", ".join(
-                [f"{s['code']} {s.get('name', '')}".strip() for s in stocks[:3]]
-            ) + (" ..." if stock_count > 3 else "") if stocks else "暂无",
-        })
-        for sub in segment.get("sub_segments", []):
-            sub_name = sub if isinstance(sub, str) else sub.get("name", "")
-            if sub_name:
-                table_rows.append({
-                    "层级": LAYER_LABELS.get(layer_key, layer_key),
-                    "层级色": layer_color,
-                    "环节": f"  └ {sub_name}",
-                    "价值链占比": None,
-                    "国产化率": None,
-                    "标的数": 0,
-                    "股票列表": "",
-                })
 
-df_segments = pd.DataFrame(table_rows)
+# ═══════════════════════════════════════════════════════
+# 视图 1：产业列表（首页）
+# ═══════════════════════════════════════════════════════
+if st.session_state.industry_view == "list":
+    st.title("🗺️ 产业地图")
+    st.caption("选择产业，查看产业链结构与核心标的")
 
-# ── 顶部概览指标 ──
-st.markdown("---")
-metric_cols = st.columns(4)
-with metric_cols[0]:
-    st.metric("总环节数", len(df_segments))
-with metric_cols[1]:
-    total_stocks = sum(len(v) for v in segment_stock_map.values())
-    st.metric("覆盖标的", total_stocks)
-with metric_cols[2]:
-    avg_loc = df_segments["国产化率"].mean()
-    st.metric("平均国产化率", f"{avg_loc:.0%}" if pd.notna(avg_loc) else "--")
-with metric_cols[3]:
-    key_seg = df_segments[df_segments["价值链占比"] == df_segments["价值链占比"].max()]["环节"].values
-    st.metric("价值最大环节", key_seg[0] if len(key_seg) else "--")
+    cols = st.columns(len(INDUSTRIES))
+    for i, ind in enumerate(INDUSTRIES):
+        with cols[i]:
+            industry_data = load_industry(ind["key"])
+            # 统计该产业覆盖的股票数
+            ind_segments = []
+            for layer_key in ["upstream", "midstream", "downstream"]:
+                layer = industry_data.get(layer_key)
+                if layer:
+                    for seg in layer.get("segments", []):
+                        ind_segments.append(seg["name"])
 
-# ── Tushare 数据补充（折叠，不默认展开）──
-with st.expander("🔍 智能补充股票数据（Tushare）", expanded=False):
-    token = os.getenv("TUSHARE_TOKEN")
-    if not token:
-        st.info("💡 需要 Tushare Token。设置环境变量 `TUSHARE_TOKEN` 后刷新页面。")
-        st.markdown("[去 tushare.pro 注册](https://tushare.pro)")
-    else:
-        if "tushare_results" not in st.session_state:
-            st.session_state.tushare_results = None
-        if "tushare_new_entries" not in st.session_state:
-            st.session_state.tushare_new_entries = []
-
-        if st.button("🚀 拉取概念板块成分股", type="primary"):
-            with st.spinner("正在从 Tushare 获取数据..."):
-                try:
-                    from packages.adapters.tushare_industry_adapter import TushareIndustryAdapter
-                    adapter = TushareIndustryAdapter(token=token)
-                    results = adapter.enrich_industry(industry_key)
-                    st.session_state.tushare_results = results
-                    st.session_state.tushare_new_entries = adapter.build_stocks_config(industry_key)
-                except Exception as e:
-                    st.error(f"获取失败: {e}")
-
-        if st.session_state.tushare_results is not None:
-            results = st.session_state.tushare_results
-            total = sum(len(v) for v in results.values())
-            st.success(f"找到 {total} 只股票，分布在 {len(results)} 个环节")
-            for seg_name, stocks in results.items():
-                display = [f"{s['code']} {s['name']}" for s in stocks[:6]]
-                st.caption(f"**{seg_name}** ({len(stocks)}只): {'、'.join(display)}")
-
-            new_entries = st.session_state.tushare_new_entries
-            if new_entries:
-                if st.button("💾 保存到 stocks.yml", type="secondary"):
-                    merged = all_stocks + new_entries
-                    save_stocks(merged)
-                    st.success(f"已保存 {len(new_entries)} 只新股票！刷新页面后查看。")
-                    st.session_state.tushare_results = None
-                    st.session_state.tushare_new_entries = []
-                    st.rerun()
-            else:
-                st.info("没有新的股票需要保存")
-
-# ── 主体：左侧旭日图 + 右侧环节表格 ──
-st.markdown("---")
-left_col, right_col = st.columns([3, 2])
-
-# ── 左侧：旭日图 ──
-with left_col:
-    st.subheader("产业链结构")
-
-    # Fetch segment scores for coloring
-    segment_scores = {}
-    try:
-        from packages.domain.database import get_session
-        from packages.domain.models import ScoreResult
-        session = get_session()
-        try:
-            # Get latest score per stock
-            latest_scores = (
-                session.query(
-                    ScoreResult.stock_code,
-                    ScoreResult.total_score,
-                )
-                .distinct(ScoreResult.stock_code)
-                .order_by(ScoreResult.stock_code, ScoreResult.scored_at.desc())
-                .all()
+            ind_stock_count = sum(
+                len(segment_stock_map.get(seg, []))
+                for seg in ind_segments
             )
-            score_map = {s.stock_code: s.total_score for s in latest_scores if s.total_score is not None}
-        finally:
-            session.close()
+            ind_seg_count = len(ind_segments)
 
-        # Aggregate by segment
-        for seg_name, stocks in segment_stock_map.items():
-            scores = [score_map.get(s["code"]) for s in stocks if score_map.get(s["code"]) is not None]
-            if scores:
-                segment_scores[seg_name] = sum(scores) / len(scores)
-    except Exception:
-        pass
+            with st.container(border=True):
+                st.markdown(f"### {ind['icon']} {ind['name']}")
+                st.caption(f"{ind_seg_count} 个细分环节")
+                st.metric("覆盖标的", f"{ind_stock_count} 只")
+                if st.button("进入产业", key=f"enter_{ind['key']}", type="primary"):
+                    st.session_state.industry_view = "detail"
+                    st.session_state.selected_industry_key = ind["key"]
+                    st.rerun()
 
-    def _score_color(avg_score):
-        if avg_score is None:
-            return "#9ca3af"  # gray: no data
-        if avg_score >= 4.0:
-            return "#10b981"  # green: excellent
-        if avg_score >= 3.0:
-            return "#f59e0b"  # amber: good
-        if avg_score >= 2.0:
-            return "#f97316"  # orange: fair
-        return "#ef4444"      # red: poor
 
-    # Build sunburst data with segment names matching the table
-    labels = [industry["name"]]
-    parents = [""]
-    values = [100]
-    colors = ["#1f2937"]  # root: dark gray
-    customdata = [""]  # for hover info
+# ═══════════════════════════════════════════════════════
+# 视图 2：产业详情（上游/中游/下游 + 细分行业）
+# ═══════════════════════════════════════════════════════
+elif st.session_state.industry_view == "detail":
+    ind_key = st.session_state.selected_industry_key
+    industry = load_industry(ind_key)
+    ind_name = industry.get("name", ind_key)
 
+    # 面包屑 + 返回按钮
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        st.markdown(f"### 🗺️ 产业地图 ＞ **{ind_name}**")
+    with col2:
+        if st.button("⬅️ 返回列表", use_container_width=True):
+            st.session_state.industry_view = "list"
+            st.session_state.selected_segment = None
+            st.session_state.selected_layer = None
+            st.rerun()
+
+    st.markdown("---")
+
+    # 遍历 上游/中游/下游
     for layer_key in ["upstream", "midstream", "downstream"]:
         layer = industry.get(layer_key)
         if not layer:
             continue
-        layer_name = layer.get("name", LAYER_LABELS.get(layer_key, layer_key))
+
         layer_color = LAYER_COLORS.get(layer_key, "#9ca3af")
+        layer_label = LAYER_LABELS.get(layer_key, layer_key)
+        layer_icon = LAYER_ICONS.get(layer_key, "")
 
-        labels.append(layer_name)
-        parents.append(industry["name"])
-        values.append(33)
-        colors.append(layer_color)
-        customdata.append("")
+        # 层级标题栏
+        st.markdown(
+            f"<h4 style='color:{layer_color};border-left:4px solid {layer_color};padding-left:12px;margin-top:24px'>"
+            f"{layer_icon} {layer.get('name', layer_label)}"
+            f"</h4>",
+            unsafe_allow_html=True,
+        )
 
-        for segment in layer.get("segments", []):
+        segments = layer.get("segments", [])
+        if not segments:
+            st.info("暂无细分环节数据")
+            continue
+
+        # 环节卡片网格（每行3个）
+        seg_cols = st.columns(3)
+        for idx, segment in enumerate(segments):
             seg_name = segment["name"]
-            labels.append(seg_name)
-            parents.append(layer_name)
-            val = segment.get("value_chain_pct", 0.1)
-            values.append(val * 100 if val <= 1 else val)
-            seg_score = segment_scores.get(seg_name)
-            colors.append(_score_color(seg_score))
-            customdata.append(f"平均分: {seg_score:.2f}" if seg_score is not None else "暂无评分")
+            stocks, stock_count, avg_score = get_segment_stats(seg_name)
 
-    fig = go.Figure(go.Sunburst(
-        labels=labels,
-        parents=parents,
-        values=values,
-        branchvalues="total",
-        marker=dict(colors=colors, line=dict(color="white", width=1)),
-        hovertemplate="<b>%{label}</b><br>%{customdata}<br>占比: %{value:.1f}<extra></extra>",
-        textinfo="label",
-        customdata=customdata,
-    ))
-    fig.update_layout(
-        margin=dict(t=10, b=10, l=10, r=10),
-        height=500,
-        paper_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(fig, width='stretch', key=f"sunburst_{industry_key}")
+            with seg_cols[idx % 3]:
+                with st.container(border=True):
+                    # 环节名称 + 股票数量
+                    st.markdown(f"**{seg_name}**")
 
-    # Layer legend
-    st.caption("层级")
-    legend_cols = st.columns(6)
-    for i, (key, label) in enumerate([("upstream", "上游"), ("midstream", "中游"), ("downstream", "下游")]):
-        with legend_cols[i]:
-            st.markdown(
-                f"<div style='display:flex;align-items:center;gap:8px'>"
-                f"<span style='width:12px;height:12px;border-radius:50%;background:{LAYER_COLORS[key]};display:inline-block'></span>"
-                f"<span>{label}</span></div>",
-                unsafe_allow_html=True,
-            )
+                    # 指标行
+                    m1, m2 = st.columns(2)
+                    with m1:
+                        st.caption(f"📌 {stock_count} 只标的")
+                    with m2:
+                        if avg_score:
+                            score_color = "#10b981" if avg_score >= 4.0 else "#f59e0b" if avg_score >= 3.0 else "#9ca3af"
+                            st.caption(f"<span style='color:{score_color}'>⭐ 均分 {avg_score:.1f}</span>", unsafe_allow_html=True)
+                        else:
+                            st.caption("⭐ 暂无评分")
 
-    # Score color legend
-    with legend_cols[3]:
-        st.markdown(
-            f"<div style='display:flex;align-items:center;gap:8px'>"
-            f"<span style='width:12px;height:12px;border-radius:50%;background:#10b981;display:inline-block'></span>"
-            f"<span>≥4.0 优秀</span></div>",
-            unsafe_allow_html=True,
-        )
-    with legend_cols[4]:
-        st.markdown(
-            f"<div style='display:flex;align-items:center;gap:8px'>"
-            f"<span style='width:12px;height:12px;border-radius:50%;background:#f59e0b;display:inline-block'></span>"
-            f"<span>≥3.0 良好</span></div>",
-            unsafe_allow_html=True,
-        )
-    with legend_cols[5]:
-        st.markdown(
-            f"<div style='display:flex;align-items:center;gap:8px'>"
-            f"<span style='width:12px;height:12px;border-radius:50%;background:#9ca3af;display:inline-block'></span>"
-            f"<span>无数据</span></div>",
-            unsafe_allow_html=True,
-        )
+                    # 价值链占比
+                    vcp = segment.get("value_chain_pct")
+                    if vcp:
+                        st.caption(f"价值链占比: {vcp:.0%}")
 
-# ── 右侧：环节详情表格 ──
-with right_col:
-    st.subheader("环节详情")
+                    # 描述
+                    desc = segment.get("description", "")
+                    if desc:
+                        st.caption(f"💡 {desc[:40]}{'...' if len(desc) > 40 else ''}")
 
-    if not df_segments.empty:
-        # Build a styled display
-        for _, row in df_segments.iterrows():
-            with st.container():
-                c1, c2, c3 = st.columns([2, 1, 1])
-                with c1:
-                    color_dot = f"<span style='color:{row['层级色']};font-size:10px'>●</span>"
-                    st.markdown(f"{color_dot} **{row['环节']}**", unsafe_allow_html=True)
-                with c2:
-                    if pd.notna(row["价值链占比"]):
-                        st.caption(f"价值链: {row['价值链占比']:.0%}")
-                with c3:
-                    if pd.notna(row["国产化率"]):
-                        st.caption(f"国产化: {row['国产化率']:.0%}")
+                    # 进入按钮
+                    if st.button("查看标的", key=f"seg_{ind_key}_{layer_key}_{idx}", use_container_width=True):
+                        st.session_state.industry_view = "stocks"
+                        st.session_state.selected_segment = seg_name
+                        st.session_state.selected_layer = layer_key
+                        st.rerun()
 
-                if row.get("描述"):
-                    st.caption(f"💡 {row['描述']}")
-                if row["股票列表"]:
-                    st.caption(f"📌 {row['股票列表']}")
-                st.markdown("---")
-    else:
-        st.info("暂无环节数据")
-
-# ── 底部：产业链笔记（Markdown 编辑区）──
-st.markdown("---")
-st.subheader("📝 产业笔记")
-
-notes_path = Path(__file__).parent.parent.parent.parent / "docs" / f"{industry_key}_notes.md"
-if notes_path.exists():
-    notes_content = notes_path.read_text(encoding="utf-8")
-else:
-    notes_content = f"""# {industry_choice}产业笔记
+    # 底部笔记
+    st.markdown("---")
+    with st.expander("📝 产业笔记"):
+        notes_path = Path(__file__).parent.parent.parent.parent / "docs" / f"{ind_key}_notes.md"
+        if notes_path.exists():
+            notes_content = notes_path.read_text(encoding="utf-8")
+        else:
+            notes_content = f"""# {ind_name}产业笔记
 
 ## 核心观点
 
@@ -312,13 +267,120 @@ else:
 
 ## 风险提示
 """
+        notes_tabs = st.tabs(["📖 查看", "✏️ 编辑"])
+        with notes_tabs[0]:
+            st.markdown(notes_content)
+        with notes_tabs[1]:
+            edited = st.text_area("编辑笔记（Markdown）", notes_content, height=300, label_visibility="collapsed")
+            if st.button("💾 保存笔记"):
+                notes_path.parent.mkdir(parents=True, exist_ok=True)
+                notes_path.write_text(edited, encoding="utf-8")
+                st.success("笔记已保存！")
 
-notes_tabs = st.tabs(["📖 查看", "✏️ 编辑"])
-with notes_tabs[0]:
-    st.markdown(notes_content)
-with notes_tabs[1]:
-    edited = st.text_area("编辑笔记（Markdown）", notes_content, height=300, label_visibility="collapsed")
-    if st.button("💾 保存笔记"):
-        notes_path.parent.mkdir(parents=True, exist_ok=True)
-        notes_path.write_text(edited, encoding="utf-8")
-        st.success("笔记已保存！")
+
+# ═══════════════════════════════════════════════════════
+# 视图 3：股票列表（选中环节后的标的详情）
+# ═══════════════════════════════════════════════════════
+elif st.session_state.industry_view == "stocks":
+    ind_key = st.session_state.selected_industry_key
+    industry = load_industry(ind_key)
+    ind_name = industry.get("name", ind_key)
+    seg_name = st.session_state.selected_segment
+    layer_key = st.session_state.selected_layer
+    layer_label = LAYER_LABELS.get(layer_key, layer_key)
+
+    # 面包屑
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        st.markdown(f"### 🗺️ 产业地图 ＞ {ind_name} ＞ **{layer_label} ＞ {seg_name}**")
+    with col2:
+        if st.button("⬅️ 返回产业", use_container_width=True):
+            st.session_state.industry_view = "detail"
+            st.session_state.selected_segment = None
+            st.session_state.selected_layer = None
+            st.rerun()
+
+    st.markdown("---")
+
+    stocks = segment_stock_map.get(seg_name, [])
+    if not stocks:
+        st.info("该环节暂无标的")
+    else:
+        st.caption(f"共 {len(stocks)} 只标的")
+
+        # 排序：有评分的放前面，按评分降序
+        stocks_sorted = sorted(
+            stocks,
+            key=lambda s: (latest_scores.get(s["code"], 0) or 0, s["code"]),
+            reverse=True,
+        )
+
+        # 每只股票一个卡片
+        for s in stocks_sorted:
+            code = s["code"]
+            name = s.get("name", "")
+            score = latest_scores.get(code)
+            fin = latest_financials.get(code)
+            tags = get_stock_tags(code, stocks)
+
+            with st.container(border=True):
+                # 第一行：名称代码 + 评分 + 标签
+                c1, c2, c3 = st.columns([2, 1, 3])
+
+                with c1:
+                    st.markdown(f"**{name}** `{code}`")
+
+                with c2:
+                    if score:
+                        score_color = "#10b981" if score >= 4.0 else "#f59e0b" if score >= 3.0 else "#ef4444"
+                        st.markdown(f"<span style='color:{score_color};font-size:18px;font-weight:bold'>⭐ {score:.1f}</span>", unsafe_allow_html=True)
+                    else:
+                        st.caption("暂无评分")
+
+                with c3:
+                    if tags:
+                        tag_html = " ".join([
+                            f"<span style='background:{color};color:white;padding:2px 8px;border-radius:12px;font-size:12px;margin-right:6px'>{label}</span>"
+                            for label, color in tags
+                        ])
+                        st.markdown(tag_html, unsafe_allow_html=True)
+                    else:
+                        st.caption("暂无标签")
+
+                # 第二行：财务指标（紧凑展示）
+                if fin:
+                    metrics = []
+                    if fin.revenue_growth is not None:
+                        metrics.append(f"营收增: {fin.revenue_growth:+.1%}")
+                    if fin.net_profit_growth is not None:
+                        metrics.append(f"净利增: {fin.net_profit_growth:+.1%}")
+                    if fin.gross_margin is not None:
+                        metrics.append(f"毛利: {fin.gross_margin:.1%}")
+                    if fin.roe is not None:
+                        metrics.append(f"ROE: {fin.roe:.1%}")
+                    if fin.pe_ttm is not None:
+                        metrics.append(f"PE: {fin.pe_ttm:.1f}x")
+                    if fin.fund_hold_pct is not None:
+                        metrics.append(f"公募: {fin.fund_hold_pct:.1%}")
+
+                    if metrics:
+                        st.caption(" ｜ ".join(metrics))
+
+    # Tushare 补充（保持原有功能）
+    st.markdown("---")
+    with st.expander("🔍 智能补充股票数据（Tushare）"):
+        token = os.getenv("TUSHARE_TOKEN")
+        if not token:
+            st.info("💡 需要 Tushare Token。设置环境变量 `TUSHARE_TOKEN` 后刷新页面。")
+        else:
+            if st.button("🚀 拉取概念板块成分股", type="primary"):
+                with st.spinner("正在从 Tushare 获取数据..."):
+                    try:
+                        from packages.adapters.tushare_industry_adapter import TushareIndustryAdapter
+                        adapter = TushareIndustryAdapter(token=token)
+                        results = adapter.enrich_industry(ind_key)
+                        st.success(f"找到 {sum(len(v) for v in results.values())} 只股票")
+                        for seg_name_t, stocks_t in results.items():
+                            st.caption(f"**{seg_name_t}** ({len(stocks_t)}只)")
+                    except Exception as e:
+                        st.error(f"获取失败: {e}")
