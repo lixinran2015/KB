@@ -69,51 +69,129 @@ try:
 
         st.markdown("---")
 
-        # 行业树
+        # ── 行业分类树（新版 v2） ──
         st.caption("行业分类树")
 
-        # Use session_state to track expanded nodes
-        if "kb_expanded" not in st.session_state:
-            st.session_state.kb_expanded = set()
+        # Pre-compute stock counts for all leaf industries
+        from sqlalchemy import func
+        stock_counts = {
+            row[0]: row[1]
+            for row in session.query(
+                StockIndustryKB.std_industry_id,
+                func.count(StockIndustryKB.stock_code)
+            ).filter(StockIndustryKB.std_industry_id.isnot(None))
+            .group_by(StockIndustryKB.std_industry_id)
+            .all()
+        }
 
-        def render_tree_node(node, indent=0):
-            """Recursively render industry tree node with expand/collapse."""
-            children = get_children(node.id)
-            has_children = len(children) > 0
+        def get_all_leaf_ids(node_id):
+            """Recursively get all leaf node IDs under a given node."""
+            children = get_children(node_id)
+            if not children:
+                return [node_id]
+            result = []
+            for child in children:
+                result.extend(get_all_leaf_ids(child.id))
+            return result
 
-            cols = st.columns([1, 6])
-            with cols[0]:
-                if has_children:
-                    is_expanded = node.id in st.session_state.kb_expanded
-                    icon = "▼" if is_expanded else "▶"
-                    if st.button(icon, key=f"toggle_{node.id}"):
-                        if is_expanded:
-                            st.session_state.kb_expanded.discard(node.id)
-                        else:
-                            st.session_state.kb_expanded.add(node.id)
-                        st.rerun()
-                else:
-                    st.write("•")
-            with cols[1]:
-                label = f"{'　' * indent}**{node.name}**"
-                if not has_children:
-                    # Leaf node - clickable to filter
-                    if st.button(label, key=f"ind_{node.id}"):
-                        st.session_state.kb_selected_industry = node.id
-                        st.session_state.kb_selected_concept = None
-                        st.rerun()
-                else:
-                    st.markdown(label)
+        def get_node_path(node_id):
+            """Return path from root to this node as list of names."""
+            path = []
+            current = next((i for i in all_industries if i.id == node_id), None)
+            while current:
+                path.append(current.name)
+                current = next((i for i in all_industries if i.id == current.parent_id), None) if current.parent_id else None
+            return list(reversed(path))
 
-            # Render children if expanded
-            if has_children and node.id in st.session_state.kb_expanded:
-                for child in children:
-                    render_tree_node(child, indent + 1)
+        def render_leaf_pill(node, parent_name=None):
+            """Render a leaf node as a compact pill-style button."""
+            leaf_count = stock_counts.get(node.id, 0)
+            is_selected = st.session_state.get("kb_selected_industry") == node.id
 
-        # Render root nodes (parent_id=0)
+            # Build label: name + count, with selection indicator
+            label = f"{'● ' if is_selected else ''}{node.name} ({leaf_count})"
+            btn_type = "primary" if is_selected else "secondary"
+
+            if st.button(
+                label,
+                key=f"leaf_{node.id}",
+                type=btn_type,
+                help=parent_name or "点击筛选该行业",
+            ):
+                st.session_state.kb_selected_industry = node.id
+                st.session_state.kb_selected_concept = None
+                st.rerun()
+
+        # Render each root as an expander
         roots = get_children(0)
         for root in roots:
-            render_tree_node(root)
+            leaf_ids = get_all_leaf_ids(root.id)
+            total_stocks = sum(stock_counts.get(lid, 0) for lid in leaf_ids)
+            root_label = f"{root.name} ({total_stocks})"
+
+            with st.expander(root_label, expanded=False):
+                lvl2_nodes = get_children(root.id)
+                if not lvl2_nodes:
+                    st.caption("暂无子分类")
+                    continue
+
+                for idx2, lvl2 in enumerate(lvl2_nodes):
+                    # L2: Section header with top border (except first)
+                    lvl2_leaf_ids = get_all_leaf_ids(lvl2.id)
+                    lvl2_count = sum(stock_counts.get(lid, 0) for lid in lvl2_leaf_ids)
+                    border_style = "border-top: 1px solid #e0e0e0; margin-top: 10px; padding-top: 8px;" if idx2 > 0 else ""
+                    st.markdown(
+                        f"<div style='{border_style} font-weight: 700; font-size: 1.05em; color: #222;'>"
+                        f"{lvl2.name} "
+                        f"<span style='color: #999; font-size: 0.8em; font-weight: 400;'>({lvl2_count})</span>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    # Collect leaves under this L2
+                    lvl3_nodes = get_children(lvl2.id)
+                    if not lvl3_nodes:
+                        continue
+
+                    # Group leaves by their L3 parent
+                    l3_groups = []  # [(l3_node, [leaf_nodes]), ...]
+                    orphan_leaves = []  # L3 nodes that are themselves leaves
+
+                    for lvl3 in lvl3_nodes:
+                        lvl4_nodes = get_children(lvl3.id)
+                        real_leaves = [l4 for l4 in lvl4_nodes if not get_children(l4.id)] if lvl4_nodes else []
+
+                        if real_leaves:
+                            l3_groups.append((lvl3, real_leaves))
+                        elif not lvl4_nodes:
+                            # lvl3 itself is a leaf
+                            orphan_leaves.append(lvl3)
+
+                    # Render orphan leaves (L3 that are leaves) first, in a compact grid
+                    if orphan_leaves:
+                        cols = st.columns(min(2, len(orphan_leaves)))
+                        for i, leaf in enumerate(orphan_leaves):
+                            with cols[i % len(cols)]:
+                                render_leaf_pill(leaf)
+
+                    # Render L3 groups
+                    for lvl3, leaves in l3_groups:
+                        # L3 sub-header
+                        st.markdown(
+                            f"<div style='margin: 6px 0 4px 4px; padding: 2px 6px; "
+                            f"background: #f5f5f5; border-radius: 4px; display: inline-block; "
+                            f"font-size: 0.85em; color: #666;'>"
+                            f"{lvl3.name}"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+
+                        # Leaves in a 2-column grid under this L3
+                        if leaves:
+                            leaf_cols = st.columns(min(2, len(leaves)))
+                            for i, leaf in enumerate(leaves):
+                                with leaf_cols[i % len(leaf_cols)]:
+                                    render_leaf_pill(leaf, parent_name=lvl3.name)
 
     # ═══════════════════════════════════════════
     # 中栏：个股列表
@@ -121,88 +199,96 @@ try:
     with mid_col:
         st.subheader("📋 个股列表")
 
-        # Build query
-        query = session.query(StockIndustryKB)
-
-        # Apply filters
-        filter_desc = []
-
-        # 1. Industry filter
+        # Determine if any filter is active
         selected_ind_id = st.session_state.get("kb_selected_industry")
-        if selected_ind_id:
-            query = query.filter_by(std_industry_id=selected_ind_id)
-            ind_name = next((i.name for i in all_industries if i.id == selected_ind_id), "")
-            filter_desc.append(f"行业: **{ind_name}**")
+        has_concept_filter = selected_concept and selected_concept != "-- 全部 --"
+        has_search = search_query.strip() != ""
+        has_active_filter = selected_ind_id or has_concept_filter or has_search
 
-        # 2. Concept filter
-        if selected_concept and selected_concept != "-- 全部 --":
-            concept_id = tag_name_to_id.get(selected_concept)
-            if concept_id:
-                # Get stock codes related to this concept
-                rel_codes = [
-                    r.stock_code for r in
-                    session.query(StockConceptRel).filter_by(concept_tag_id=concept_id).all()
-                ]
-                query = query.filter(StockIndustryKB.stock_code.in_(rel_codes))
-                filter_desc.append(f"概念: **{selected_concept}**")
-
-        # 3. Search filter
-        if search_query.strip():
-            q = search_query.strip()
-            # Search across code, name, industry name, concept name
-            matched_concept_ids = [
-                t.id for t in all_tags if q in t.name
-            ]
-            matched_industry_ids = [
-                i.id for i in all_industries if q in i.name
-            ]
-
-            concept_stock_codes = []
-            if matched_concept_ids:
-                concept_stock_codes = [
-                    r.stock_code for r in
-                    session.query(StockConceptRel)
-                    .filter(StockConceptRel.concept_tag_id.in_(matched_concept_ids))
-                    .all()
-                ]
-
-            query = query.filter(
-                (StockIndustryKB.stock_code.contains(q)) |
-                (StockIndustryKB.stock_name.contains(q)) |
-                (StockIndustryKB.std_industry_id.in_(matched_industry_ids)) |
-                (StockIndustryKB.stock_code.in_(concept_stock_codes))
-            )
-            filter_desc.append(f"搜索: **{q}**")
-
-        stocks = query.all()
-
-        # Show filter info
-        if filter_desc:
-            st.caption(" | ".join(filter_desc))
+        if not has_active_filter:
+            st.info("👈 请在左侧选择行业分类、概念标签，或输入搜索关键词")
+            st.caption("当前未设置筛选条件，个股列表已隐藏")
         else:
-            st.caption("显示全部")
+            # Build query
+            query = session.query(StockIndustryKB)
 
-        st.caption(f"共 {len(stocks)} 条记录")
+            # Apply filters
+            filter_desc = []
 
-        # Display stock cards
-        for s in stocks:
-            with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.markdown(f"**{s.stock_name}** `{s.stock_code}`")
-                    path = get_industry_path(s.std_industry_id)
-                    st.caption(f"🏭 {path}")
-                    if s.business_desc:
-                        st.caption(f"📝 {s.business_desc[:60]}{'...' if len(s.business_desc) > 60 else ''}")
-                    # Show concepts
-                    rel_tags = session.query(StockConceptRel).filter_by(stock_code=s.stock_code).all()
-                    if rel_tags:
-                        tag_names = [tag_map.get(r.concept_tag_id, "?") for r in rel_tags]
-                        st.caption("🏷️ " + " · ".join(tag_names))
-                with c2:
-                    if st.button("编辑", key=f"edit_{s.stock_code}"):
-                        st.session_state.kb_editing_stock = s.stock_code
-                        st.rerun()
+            # 1. Industry filter
+            if selected_ind_id:
+                query = query.filter_by(std_industry_id=selected_ind_id)
+                ind_name = next((i.name for i in all_industries if i.id == selected_ind_id), "")
+                filter_desc.append(f"行业: **{ind_name}**")
+
+            # 2. Concept filter
+            if has_concept_filter:
+                concept_id = tag_name_to_id.get(selected_concept)
+                if concept_id:
+                    # Get stock codes related to this concept
+                    rel_codes = [
+                        r.stock_code for r in
+                        session.query(StockConceptRel).filter_by(concept_tag_id=concept_id).all()
+                    ]
+                    query = query.filter(StockIndustryKB.stock_code.in_(rel_codes))
+                    filter_desc.append(f"概念: **{selected_concept}**")
+
+            # 3. Search filter
+            if has_search:
+                q = search_query.strip()
+                # Search across code, name, industry name, concept name
+                matched_concept_ids = [
+                    t.id for t in all_tags if q in t.name
+                ]
+                matched_industry_ids = [
+                    i.id for i in all_industries if q in i.name
+                ]
+
+                concept_stock_codes = []
+                if matched_concept_ids:
+                    concept_stock_codes = [
+                        r.stock_code for r in
+                        session.query(StockConceptRel)
+                        .filter(StockConceptRel.concept_tag_id.in_(matched_concept_ids))
+                        .all()
+                    ]
+
+                query = query.filter(
+                    (StockIndustryKB.stock_code.contains(q)) |
+                    (StockIndustryKB.stock_name.contains(q)) |
+                    (StockIndustryKB.std_industry_id.in_(matched_industry_ids)) |
+                    (StockIndustryKB.stock_code.in_(concept_stock_codes))
+                )
+                filter_desc.append(f"搜索: **{q}**")
+
+            stocks = query.all()
+
+            # Show filter info
+            st.caption(" | ".join(filter_desc))
+            st.caption(f"共 {len(stocks)} 条记录")
+
+            if not stocks:
+                st.warning("未找到符合条件的个股")
+            else:
+                # Display stock cards
+                for s in stocks:
+                    with st.container(border=True):
+                        c1, c2 = st.columns([3, 1])
+                        with c1:
+                            st.markdown(f"**{s.stock_name}** `{s.stock_code}`")
+                            path = get_industry_path(s.std_industry_id)
+                            st.caption(f"🏭 {path}")
+                            if s.business_desc:
+                                st.caption(f"📝 {s.business_desc[:60]}{'...' if len(s.business_desc) > 60 else ''}")
+                            # Show concepts
+                            rel_tags = session.query(StockConceptRel).filter_by(stock_code=s.stock_code).all()
+                            if rel_tags:
+                                tag_names = [tag_map.get(r.concept_tag_id, "?") for r in rel_tags]
+                                st.caption("🏷️ " + " · ".join(tag_names))
+                        with c2:
+                            if st.button("编辑", key=f"edit_{s.stock_code}"):
+                                st.session_state.kb_editing_stock = s.stock_code
+                                st.rerun()
 
     # ═══════════════════════════════════════════
     # 右栏：个股编辑
