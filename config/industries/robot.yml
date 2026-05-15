@@ -1,0 +1,30 @@
+name: 机器人
+upstream:
+  name: 核心零部件
+  segments:
+    - name: 减速器
+      key_stocks: []
+    - name: 伺服电机
+      key_stocks: []
+    - name: 传感器
+      key_stocks: []
+    - name: 丝杠
+      key_stocks: []
+
+midstream:
+  name: 本体制造
+  segments:
+    - name: 整机代工
+      key_stocks: []
+    - name: 系统集成
+      key_stocks: []
+
+downstream:
+  name: 场景落地
+  segments:
+    - name: 工业制造
+      key_stocks: []
+    - name: 医疗机器人
+      key_stocks: []
+    - name: 家用服务机器人
+      key_stocks: []

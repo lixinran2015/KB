@@ -1,0 +1,11 @@
+stocks:
+  - code: "300308.SZ"
+    name: "中际旭创"
+    segment: "光模块"
+    style: "白马股"
+    market_cap_tier: "大盘"
+  - code: "300502.SZ"
+    name: "新易盛"
+    segment: "光模块"
+    style: "弹性小票"
+    market_cap_tier: "中盘"

@@ -1,0 +1,45 @@
+name: 人工智能
+upstream:
+  name: 算力底座
+  segments:
+    - name: 光模块/CPO
+      value_chain_pct: 0.08
+      localization_rate: 0.60
+      key_stocks: [300308, 300502]
+    - name: GPU/ASIC芯片
+      value_chain_pct: 0.35
+      localization_rate: 0.05
+      key_stocks: []
+    - name: 服务器
+      value_chain_pct: 0.15
+      localization_rate: 0.30
+      key_stocks: []
+    - name: 液冷散热
+      value_chain_pct: 0.03
+      localization_rate: 0.50
+      key_stocks: []
+
+midstream:
+  name: 模型平台
+  segments:
+    - name: 大模型厂商
+      key_stocks: []
+    - name: 数据要素
+      sub_segments:
+        - name: 数据采集与标注
+        - name: 数据存储与管理
+      key_stocks: []
+    - name: 算法公司
+      key_stocks: []
+
+downstream:
+  name: 应用落地
+  segments:
+    - name: 传媒游戏（AIGC）
+      key_stocks: []
+    - name: 办公软件
+      key_stocks: []
+    - name: 自动驾驶
+      key_stocks: []
+    - name: AI+医疗
+      key_stocks: []
