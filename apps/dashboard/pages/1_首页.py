@@ -46,14 +46,22 @@ st.subheader("📁 我的关注清单")
 wm = WatchlistManager()
 wls = wm.list_watchlists()
 
+# Update metric
+if wls:
+    st.session_state["watchlist_count"] = len(wls)
+
 if not wls:
     st.info("暂无关注清单，请在左侧导航栏进入“关注清单”页面创建")
 else:
-    cols = st.columns(len(wls))
-    for i, wl in enumerate(wls):
-        with cols[i]:
+    # Limit display to avoid crowding
+    display_wls = wls[:8]
+    cols = st.columns(min(len(display_wls), 4))
+    for i, wl in enumerate(display_wls):
+        with cols[i % 4]:
             items = wm.get_items(wl.id)
             st.metric(wl.name, f"{len(items)}只")
+    if len(wls) > 8:
+        st.caption(f"... 还有 {len(wls) - 8} 个组合")
 
 st.markdown("---")
 

@@ -80,8 +80,15 @@ def cmd_quarterly():
         backup_path = create_backup(DB_PATH)
         logger.info(f"Backup created: {backup_path}")
 
-        adapter = MockAdapter("stock_300308_q1_2024")
-        engine = ScoringEngine(adapter=adapter)
+        # Use AKShare if available, fall back to mock for testing
+        try:
+            adapter = AKShareAdapter()
+            engine = ScoringEngine(adapter=adapter)
+        except Exception:
+            logger.warning("AKShare not available, using mock data for testing")
+            adapter = MockAdapter("stock_300308_q1_2024")
+            engine = ScoringEngine(adapter=adapter)
+
         stocks = load_stocks()
 
         for s in stocks:
@@ -114,8 +121,15 @@ def cmd_rollback():
 def cmd_score(segment: str = None):
     """Run scoring for all or specific segment"""
     cmd_init()
-    adapter = MockAdapter("stock_300308_q1_2024")
-    engine = ScoringEngine(adapter=adapter)
+    # Use AKShare if available, fall back to mock for testing
+    try:
+        adapter = AKShareAdapter()
+        engine = ScoringEngine(adapter=adapter)
+    except Exception:
+        logger.warning("AKShare not available, using mock data for testing")
+        adapter = MockAdapter("stock_300308_q1_2024")
+        engine = ScoringEngine(adapter=adapter)
+
     stocks = load_stocks()
 
     for s in stocks:

@@ -9,6 +9,7 @@ from packages.domain.database import get_session
 from packages.domain.models import QualitativeScore
 from packages.engines.scoring_engine import ScoringEngine
 from packages.engines.watchlist_manager import WatchlistManager
+from packages.adapters.akshare_adapter import AKShareAdapter
 from packages.adapters.mock_adapter import MockAdapter
 
 st.title("📋 个股档案")
@@ -19,8 +20,11 @@ stock_options = {f"{s['code']} {s['name']}": s for s in stocks}
 selected = st.selectbox("选择股票", list(stock_options.keys()))
 stock = stock_options[selected]
 
-# Score
-adapter = MockAdapter("stock_300308_q1_2024")
+# Score — use AKShare if available, fall back to mock for testing
+try:
+    adapter = AKShareAdapter()
+except Exception:
+    adapter = MockAdapter("stock_300308_q1_2024")
 engine = ScoringEngine(adapter=adapter)
 
 with st.spinner("计算评分..."):
