@@ -247,6 +247,61 @@ for i, wl in enumerate(wls):
             else:
                 st.info("同环节股票不足2只，无法横向对比")
 
+        # ── 评分变化趋势 ──
+        st.markdown("---")
+        st.subheader("📉 评分变化趋势")
+
+        trend_data = []
+        session = get_session()
+        try:
+            for item in items:
+                hist = (
+                    session.query(ScoreResult)
+                    .filter_by(stock_code=item.stock_code)
+                    .order_by(ScoreResult.scored_at.asc())
+                    .limit(10)
+                    .all()
+                )
+                for h in hist:
+                    if h.total_score is not None and h.scored_at is not None:
+                        trend_data.append({
+                            "股票": stock_map.get(item.stock_code, {}).get("name", item.stock_code),
+                            "时间": h.scored_at.strftime("%m-%d %H:%M"),
+                            "综合评分": h.total_score,
+                        })
+        finally:
+            session.close()
+
+        if trend_data:
+            trend_df = pd.DataFrame(trend_data)
+            # Only show stocks with multiple data points
+            stock_counts = trend_df["股票"].value_counts()
+            valid_stocks = stock_counts[stock_counts >= 2].index.tolist()
+            if valid_stocks:
+                fig = go.Figure()
+                colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#f472b6", "#84cc16"]
+                for idx, stock_name in enumerate(valid_stocks[:8]):  # limit to 8 stocks
+                    sub = trend_df[trend_df["股票"] == stock_name]
+                    fig.add_trace(go.Scatter(
+                        x=sub["时间"], y=sub["综合评分"],
+                        mode='lines+markers',
+                        name=stock_name,
+                        line=dict(color=colors[idx % len(colors)], width=2),
+                    ))
+                fig.update_layout(
+                    margin=dict(t=10, b=10, l=10, r=10),
+                    height=280,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.35),
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.1)', range=[0, 5]),
+                )
+                st.plotly_chart(fig, width='stretch', key=f"trend_{wl.id}")
+            else:
+                st.info("历史评分数据不足，需要至少2个时间点的记录")
+        else:
+            st.info("暂无历史评分数据")
+
         # ── 添加股票 ──
         st.markdown("---")
         available = [f"{s['code']} {s['name']}" for s in all_stocks]
