@@ -456,6 +456,68 @@ def cmd_init_kb():
     init_kb()
 
 
+def cmd_sync_stocks_full(skip_concepts: bool = False):
+    """Sync all A-share stocks and concept data from Tushare to the database."""
+    from packages.adapters.tushare_full_sync import TushareFullSync
+    cmd_init()
+    try:
+        sync = TushareFullSync()
+        sync.run_full_sync(skip_concepts=skip_concepts)
+    except ValueError as e:
+        logger.error(f"{e}")
+        logger.info("Set TUSHARE_TOKEN env var or register at tushare.pro")
+        sys.exit(1)
+    except ImportError:
+        logger.error("tushare not installed; run: pip install tushare")
+        sys.exit(1)
+
+
+def cmd_enrich_business_desc(limit: int = None, batch_size: int = 10, dry_run: bool = False):
+    """Enrich stock business descriptions using DeepSeek AI."""
+    from packages.adapters.llm_enricher import DeepSeekEnricher
+    cmd_init()
+    try:
+        enricher = DeepSeekEnricher()
+        enricher.run_enrichment(limit=limit, batch_size=batch_size, dry_run=dry_run)
+    except ValueError as e:
+        logger.error(f"{e}")
+        logger.info("Set DEEPSEEK_API_KEY env var")
+        sys.exit(1)
+    except ImportError:
+        logger.error("openai not installed; run: pip install openai")
+        sys.exit(1)
+
+
+def cmd_classify_l4(dry_run: bool = False, l3_filter: int = None):
+    """Classify stocks from L3 to L4 leaf nodes using keyword rules."""
+    from packages.adapters.l4_classifier import L4Classifier
+    cmd_init()
+    classifier = L4Classifier()
+    result = classifier.run_full_classification(dry_run=dry_run, l3_filter=l3_filter)
+
+    print(f"\n{'=' * 50}")
+    print(f"L4 Classification {'(DRY RUN)' if dry_run else 'RESULTS'}")
+    print(f"{'=' * 50}")
+    print(f"  Total classified:   {result['total_classified']}")
+    print(f"  Total unclassified: {result['total_unclassified']}")
+    total = result['total_classified'] + result['total_unclassified']
+    if total > 0:
+        print(f"  Coverage:           {result['total_classified'] / total * 100:.1f}%")
+    print(f"{'=' * 50}")
+
+    for r in result['results']:
+        subtotal = r['classified'] + r['unclassified']
+        coverage = r['classified'] / subtotal * 100 if subtotal > 0 else 0
+        print(f"\nL3 {r['l3_id']} {r['l3_name']}: {r['classified']}/{subtotal} ({coverage:.1f}%)")
+        for l4_id, count in sorted(r['distribution'].items()):
+            print(f"  -> L4 {l4_id}: {count}")
+        if r['unclassified'] > 0:
+            print(f"  -> unclassified: {r['unclassified']}")
+
+    if dry_run:
+        print("\nUse --apply to persist changes.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stock KB CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -491,6 +553,18 @@ def main():
     subparsers.add_parser("cache-stats", help="Show database statistics")
     subparsers.add_parser("init-kb", help="Initialize structured knowledge base")
 
+    sync_stocks_parser = subparsers.add_parser("sync-stocks-full", help="Sync all A-share stocks and concept data from Tushare")
+    sync_stocks_parser.add_argument("--skip-concepts", action="store_true", help="Skip concept relation sync")
+
+    enrich_desc_parser = subparsers.add_parser("enrich-business-desc", help="Enrich stock business descriptions using DeepSeek AI")
+    enrich_desc_parser.add_argument("--limit", type=int, help="Max stocks to process")
+    enrich_desc_parser.add_argument("--batch-size", type=int, default=10, help="Commit every N stocks")
+    enrich_desc_parser.add_argument("--dry-run", action="store_true", help="Print prompts without calling API")
+
+    classify_l4_parser = subparsers.add_parser("classify-l4", help="Classify stocks from L3 to L4 leaf nodes")
+    classify_l4_parser.add_argument("--apply", action="store_true", help="Apply classification (default: dry-run)")
+    classify_l4_parser.add_argument("--l3", type=int, help="Only classify stocks under specific L3 node")
+
     add_ind_parser = subparsers.add_parser("add-industry", help="Create new industry template")
     add_ind_parser.add_argument("name", help="Industry name (kebab-case)")
     add_ind_parser.add_argument("--segments", nargs="+", help="Segment names")
@@ -525,6 +599,12 @@ def main():
         cmd_cache_stats()
     elif args.command == "init-kb":
         cmd_init_kb()
+    elif args.command == "sync-stocks-full":
+        cmd_sync_stocks_full(skip_concepts=args.skip_concepts)
+    elif args.command == "enrich-business-desc":
+        cmd_enrich_business_desc(limit=args.limit, batch_size=args.batch_size, dry_run=args.dry_run)
+    elif args.command == "classify-l4":
+        cmd_classify_l4(dry_run=not args.apply, l3_filter=args.l3)
     elif args.command == "add-industry":
         cmd_add_industry(args.name, args.segments)
     else:

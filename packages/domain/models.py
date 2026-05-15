@@ -136,9 +136,13 @@ class IndustryTree(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)
-    parent_id = Column(Integer, default=0)  # 0 = top-level root
+    parent_id = Column(Integer, ForeignKey("industry_tree.id"), default=0)  # 0 = top-level root
     level = Column(Integer, nullable=False)  # 1/2/3/4
     sort = Column(Integer, default=0)
+
+    # Relationships
+    children = relationship("IndustryTree", backref="parent", remote_side=[id])
+    stocks = relationship("StockIndustryKB", back_populates="industry")
 
 
 class ConceptTag(Base):
@@ -148,6 +152,9 @@ class ConceptTag(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False, unique=True)
 
+    # Relationships
+    stocks = relationship("StockIndustryKB", secondary="stock_concept_rel", back_populates="concepts")
+
 
 class StockIndustryKB(Base):
     """Core knowledge base: stock -> leaf industry binding."""
@@ -155,13 +162,31 @@ class StockIndustryKB(Base):
 
     stock_code = Column(String, primary_key=True)
     stock_name = Column(String, nullable=False)
-    std_industry_id = Column(Integer, nullable=False)  # FK to industry_tree (leaf level)
+    std_industry_id = Column(Integer, ForeignKey("industry_tree.id"), nullable=True)
     business_desc = Column(Text)
+
+    # Tushare basic info
+    area = Column(String)
+    list_date = Column(String)
+    market = Column(String)
+    exchange = Column(String)
+    industry_raw = Column(String)  # Tushare原始申万行业名
+    main_business_raw = Column(Text)  # Tushare stock_company 主营业务
+    is_hs = Column(String)
+    enriched_at = Column(DateTime)
+
+    # Relationships
+    industry = relationship("IndustryTree", back_populates="stocks")
+    concepts = relationship("ConceptTag", secondary="stock_concept_rel", back_populates="stocks")
 
 
 class StockConceptRel(Base):
     """Many-to-many junction: stock <-> concept_tag."""
     __tablename__ = "stock_concept_rel"
 
-    stock_code = Column(String, primary_key=True)
-    concept_tag_id = Column(Integer, primary_key=True)
+    stock_code = Column(String, ForeignKey("stock_industry_kb.stock_code"), primary_key=True)
+    concept_tag_id = Column(Integer, ForeignKey("concept_tag.id"), primary_key=True)
+
+    # Relationships (read-only; use StockIndustryKB.concepts / ConceptTag.stocks for writes)
+    stock = relationship("StockIndustryKB", viewonly=True)
+    tag = relationship("ConceptTag", viewonly=True)

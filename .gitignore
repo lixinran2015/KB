@@ -21,3 +21,13 @@ data/logs/*.log
 # Environment
 .env
 .venv/
+
+# macOS
+.DS_Store
+
+# Coverage
+.coverage
+.coverage.*
+
+# Misc
+amp
