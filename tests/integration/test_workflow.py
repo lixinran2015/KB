@@ -10,6 +10,8 @@ def test_cli_help():
     )
     assert result.returncode == 0
     assert "daily" in result.stdout
+    assert "quarterly" in result.stdout
+    assert "rollback" in result.stdout
 
 
 def test_cli_validate():

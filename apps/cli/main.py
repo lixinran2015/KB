@@ -6,7 +6,8 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from packages.domain.database import init_db
+from packages.domain.database import init_db, DB_PATH
+from packages.domain.locks import WorkflowLock, create_backup, list_backups, rollback_to_backup
 from packages.config.loader import load_stocks
 from packages.config.validators import StockConfig
 from packages.engines.scoring_engine import ScoringEngine
@@ -43,31 +44,71 @@ def cmd_validate():
 
 def cmd_daily():
     """Daily update workflow"""
-    cmd_init()
-    logger.info("Starting daily workflow...")
+    with WorkflowLock():
+        cmd_init()
+        logger.info("Starting daily workflow...")
 
-    # For MVP, use mock adapter if AKShare is not available
-    try:
-        adapter = AKShareAdapter()
-        engine = ScoringEngine(adapter=adapter)
-    except Exception:
-        logger.warning("AKShare not available, using mock data for testing")
+        # For MVP, use mock adapter if AKShare is not available
+        try:
+            adapter = AKShareAdapter()
+            engine = ScoringEngine(adapter=adapter)
+        except Exception:
+            logger.warning("AKShare not available, using mock data for testing")
+            adapter = MockAdapter("stock_300308_q1_2024")
+            engine = ScoringEngine(adapter=adapter)
+
+        stocks = load_stocks()
+        for s in stocks:
+            try:
+                result = engine.calculate(
+                    stock_code=s["code"],
+                    segment=s["segment"],
+                    report_period="2024Q1",
+                )
+                logger.info(f"{s['code']}: score={result.total_score}, status={result.status}")
+            except Exception as e:
+                logger.error(f"Failed to score {s['code']}: {e}")
+
+        logger.info("Daily workflow completed")
+
+
+def cmd_quarterly():
+    """Quarterly update workflow with backup"""
+    with WorkflowLock():
+        cmd_init()
+        logger.info("Creating backup before quarterly update...")
+        backup_path = create_backup(DB_PATH)
+        logger.info(f"Backup created: {backup_path}")
+
         adapter = MockAdapter("stock_300308_q1_2024")
         engine = ScoringEngine(adapter=adapter)
+        stocks = load_stocks()
 
-    stocks = load_stocks()
-    for s in stocks:
-        try:
-            result = engine.calculate(
-                stock_code=s["code"],
-                segment=s["segment"],
-                report_period="2024Q1",
-            )
-            logger.info(f"{s['code']}: score={result.total_score}, status={result.status}")
-        except Exception as e:
-            logger.error(f"Failed to score {s['code']}: {e}")
+        for s in stocks:
+            try:
+                result = engine.calculate(
+                    stock_code=s["code"],
+                    segment=s["segment"],
+                    report_period="2024Q1",
+                )
+                logger.info(f"{s['code']}: score={result.total_score}, status={result.status}")
+            except Exception as e:
+                logger.error(f"Failed to score {s['code']}: {e}")
 
-    logger.info("Daily workflow completed")
+        logger.info("Quarterly workflow completed")
+
+
+def cmd_rollback():
+    """Rollback to most recent backup"""
+    backups = list_backups()
+    if not backups:
+        logger.error("No backups found")
+        sys.exit(1)
+
+    latest = backups[0]
+    logger.info(f"Rolling back to: {latest}")
+    rollback_to_backup(DB_PATH, latest)
+    logger.info("Rollback completed")
 
 
 def cmd_score(segment: str = None):
@@ -95,6 +136,8 @@ def main():
     subparsers.add_parser("init", help="Initialize database")
     subparsers.add_parser("validate", help="Validate configurations")
     subparsers.add_parser("daily", help="Run daily update workflow")
+    subparsers.add_parser("quarterly", help="Run quarterly update with backup")
+    subparsers.add_parser("rollback", help="Rollback to latest backup")
 
     score_parser = subparsers.add_parser("score", help="Run scoring")
     score_parser.add_argument("--segment", help="Filter by segment")
@@ -107,6 +150,10 @@ def main():
         cmd_validate()
     elif args.command == "daily":
         cmd_daily()
+    elif args.command == "quarterly":
+        cmd_quarterly()
+    elif args.command == "rollback":
+        cmd_rollback()
     elif args.command == "score":
         cmd_score(args.segment)
     else:
