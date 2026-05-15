@@ -128,3 +128,40 @@ class WorkflowRun(Base):
     completed_at = Column(DateTime)
     backup_path = Column(String)
     error_message = Column(Text)
+
+
+class IndustryTree(Base):
+    """Global unified industry classification tree (self-referencing)."""
+    __tablename__ = "industry_tree"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    parent_id = Column(Integer, default=0)  # 0 = top-level root
+    level = Column(Integer, nullable=False)  # 1/2/3/4
+    sort = Column(Integer, default=0)
+
+
+class ConceptTag(Base):
+    """Unified concept tag pool shared by all A-share stocks."""
+    __tablename__ = "concept_tag"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False, unique=True)
+
+
+class StockIndustryKB(Base):
+    """Core knowledge base: stock -> leaf industry binding."""
+    __tablename__ = "stock_industry_kb"
+
+    stock_code = Column(String, primary_key=True)
+    stock_name = Column(String, nullable=False)
+    std_industry_id = Column(Integer, nullable=False)  # FK to industry_tree (leaf level)
+    business_desc = Column(Text)
+
+
+class StockConceptRel(Base):
+    """Many-to-many junction: stock <-> concept_tag."""
+    __tablename__ = "stock_concept_rel"
+
+    stock_code = Column(String, primary_key=True)
+    concept_tag_id = Column(Integer, primary_key=True)

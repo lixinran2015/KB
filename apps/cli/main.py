@@ -450,6 +450,12 @@ def cmd_add_industry(name: str, segments: list = None):
         print(f"  - {s}")
 
 
+def cmd_init_kb():
+    """Initialize structured knowledge base (industry tree + concept tags + demo data)."""
+    from scripts.init_kb_data import init_kb
+    init_kb()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stock KB CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -483,6 +489,7 @@ def main():
 
     subparsers.add_parser("sync-full", help="Sync all historical financial data")
     subparsers.add_parser("cache-stats", help="Show database statistics")
+    subparsers.add_parser("init-kb", help="Initialize structured knowledge base")
 
     add_ind_parser = subparsers.add_parser("add-industry", help="Create new industry template")
     add_ind_parser.add_argument("name", help="Industry name (kebab-case)")
@@ -516,6 +523,8 @@ def main():
         cmd_sync_full()
     elif args.command == "cache-stats":
         cmd_cache_stats()
+    elif args.command == "init-kb":
+        cmd_init_kb()
     elif args.command == "add-industry":
         cmd_add_industry(args.name, args.segments)
     else:
