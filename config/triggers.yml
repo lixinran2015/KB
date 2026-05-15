@@ -1,0 +1,23 @@
+version: "2.0"
+
+triggers:
+  - id: volume_spike
+    name: 成交量倍量
+    category: technical
+    condition: volume > ma_volume_20 * 2
+    description: "当日成交量超过20日均量2倍"
+    priority: high
+
+  - id: break_year_line
+    name: 突破年线
+    category: technical
+    condition: close > ma_250
+    description: "收盘价站上250日均线"
+    priority: medium
+
+  - id: sector_strength_top3
+    name: 板块强度前三
+    category: sector
+    condition: sector_rank <= 3
+    description: "板块涨幅排名进入前三"
+    priority: medium
