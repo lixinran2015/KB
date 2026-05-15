@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from packages.config.loader import load_stocks
 from packages.domain.database import get_session, get_latest_financial
-from packages.domain.models import QualitativeScore
+from packages.domain.models import QualitativeScore, ScoreResult
 from packages.engines.scoring_engine import ScoringEngine
 from packages.engines.valuation_engine import ValuationEngine
 from packages.engines.watchlist_manager import WatchlistManager
@@ -180,6 +180,53 @@ if result.status == "OK":
                         st.warning(f"⚠️ 定性评分已 {days_old} 天未更新，建议复核")
                 except ValueError:
                     pass
+
+    # ── 历史评分趋势 ──
+    st.markdown("---")
+    st.subheader("📈 历史评分趋势")
+    session = get_session()
+    try:
+        history = (
+            session.query(ScoreResult)
+            .filter_by(stock_code=stock["code"])
+            .order_by(ScoreResult.scored_at.asc())
+            .limit(20)
+            .all()
+        )
+    finally:
+        session.close()
+
+    if history:
+        hist_df = pd.DataFrame([{
+            "时间": h.scored_at.strftime("%m-%d %H:%M") if h.scored_at else "",
+            "综合评分": h.total_score,
+            "财务评分": h.financial_score,
+        } for h in history if h.total_score is not None])
+        if not hist_df.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=hist_df["时间"], y=hist_df["综合评分"],
+                mode='lines+markers', name='综合评分',
+                line=dict(color='#3b82f6', width=2),
+            ))
+            fig.add_trace(go.Scatter(
+                x=hist_df["时间"], y=hist_df["财务评分"],
+                mode='lines+markers', name='财务评分',
+                line=dict(color='#10b981', width=2),
+            ))
+            fig.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=250,
+                paper_bgcolor="rgba(0,0,0,0)",
+                legend=dict(orientation="h", yanchor="bottom", y=-0.3),
+                xaxis=dict(showgrid=False),
+                yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.1)', range=[0, 5]),
+            )
+            st.plotly_chart(fig, width='stretch', key=f"history_{stock['code']}")
+        else:
+            st.info("暂无历史评分数据")
+    else:
+        st.info("暂无历史评分数据")
 
 else:
     st.warning(f"⚠️ {result.message}")
