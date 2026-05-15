@@ -11,6 +11,30 @@ from packages.adapters.base import DataAdapter
 logger = logging.getLogger(__name__)
 
 
+class TriggerStateMachine:
+    VALID_TRANSITIONS = {
+        "watching": ["triggered"],
+        "triggered": ["confirmed", "expired"],
+        "confirmed": [],
+        "expired": [],
+    }
+
+    def __init__(self, state: str = "watching"):
+        self.state = state
+
+    def trigger(self):
+        if "triggered" in self.VALID_TRANSITIONS.get(self.state, []):
+            self.state = "triggered"
+
+    def confirm(self):
+        if "confirmed" in self.VALID_TRANSITIONS.get(self.state, []):
+            self.state = "confirmed"
+
+    def expire(self):
+        if "expired" in self.VALID_TRANSITIONS.get(self.state, []):
+            self.state = "expired"
+
+
 @dataclass
 class TriggerResult:
     stock_code: str
