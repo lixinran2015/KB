@@ -144,11 +144,52 @@ left_col, right_col = st.columns([3, 2])
 with left_col:
     st.subheader("产业链结构")
 
+    # Fetch segment scores for coloring
+    segment_scores = {}
+    try:
+        from packages.domain.database import get_session
+        from packages.domain.models import ScoreResult
+        session = get_session()
+        try:
+            # Get latest score per stock
+            latest_scores = (
+                session.query(
+                    ScoreResult.stock_code,
+                    ScoreResult.total_score,
+                )
+                .distinct(ScoreResult.stock_code)
+                .order_by(ScoreResult.stock_code, ScoreResult.scored_at.desc())
+                .all()
+            )
+            score_map = {s.stock_code: s.total_score for s in latest_scores if s.total_score is not None}
+        finally:
+            session.close()
+
+        # Aggregate by segment
+        for seg_name, stocks in segment_stock_map.items():
+            scores = [score_map.get(s["code"]) for s in stocks if score_map.get(s["code"]) is not None]
+            if scores:
+                segment_scores[seg_name] = sum(scores) / len(scores)
+    except Exception:
+        pass
+
+    def _score_color(avg_score):
+        if avg_score is None:
+            return "#9ca3af"  # gray: no data
+        if avg_score >= 4.0:
+            return "#10b981"  # green: excellent
+        if avg_score >= 3.0:
+            return "#f59e0b"  # amber: good
+        if avg_score >= 2.0:
+            return "#f97316"  # orange: fair
+        return "#ef4444"      # red: poor
+
     # Build sunburst data with segment names matching the table
     labels = [industry["name"]]
     parents = [""]
     values = [100]
     colors = ["#1f2937"]  # root: dark gray
+    customdata = [""]  # for hover info
 
     for layer_key in ["upstream", "midstream", "downstream"]:
         layer = industry.get(layer_key)
@@ -161,6 +202,7 @@ with left_col:
         parents.append(industry["name"])
         values.append(33)
         colors.append(layer_color)
+        customdata.append("")
 
         for segment in layer.get("segments", []):
             seg_name = segment["name"]
@@ -168,7 +210,9 @@ with left_col:
             parents.append(layer_name)
             val = segment.get("value_chain_pct", 0.1)
             values.append(val * 100 if val <= 1 else val)
-            colors.append(layer_color)
+            seg_score = segment_scores.get(seg_name)
+            colors.append(_score_color(seg_score))
+            customdata.append(f"平均分: {seg_score:.2f}" if seg_score is not None else "暂无评分")
 
     fig = go.Figure(go.Sunburst(
         labels=labels,
@@ -176,8 +220,9 @@ with left_col:
         values=values,
         branchvalues="total",
         marker=dict(colors=colors, line=dict(color="white", width=1)),
-        hovertemplate="<b>%{label}</b><br>占比: %{value:.1f}<extra></extra>",
+        hovertemplate="<b>%{label}</b><br>%{customdata}<br>占比: %{value:.1f}<extra></extra>",
         textinfo="label",
+        customdata=customdata,
     ))
     fig.update_layout(
         margin=dict(t=10, b=10, l=10, r=10),
@@ -186,8 +231,9 @@ with left_col:
     )
     st.plotly_chart(fig, width='stretch', key=f"sunburst_{industry_key}")
 
-    # Legend
-    legend_cols = st.columns(3)
+    # Layer legend
+    st.caption("层级")
+    legend_cols = st.columns(6)
     for i, (key, label) in enumerate([("upstream", "上游"), ("midstream", "中游"), ("downstream", "下游")]):
         with legend_cols[i]:
             st.markdown(
@@ -196,6 +242,29 @@ with left_col:
                 f"<span>{label}</span></div>",
                 unsafe_allow_html=True,
             )
+
+    # Score color legend
+    with legend_cols[3]:
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:8px'>"
+            f"<span style='width:12px;height:12px;border-radius:50%;background:#10b981;display:inline-block'></span>"
+            f"<span>≥4.0 优秀</span></div>",
+            unsafe_allow_html=True,
+        )
+    with legend_cols[4]:
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:8px'>"
+            f"<span style='width:12px;height:12px;border-radius:50%;background:#f59e0b;display:inline-block'></span>"
+            f"<span>≥3.0 良好</span></div>",
+            unsafe_allow_html=True,
+        )
+    with legend_cols[5]:
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:8px'>"
+            f"<span style='width:12px;height:12px;border-radius:50%;background:#9ca3af;display:inline-block'></span>"
+            f"<span>无数据</span></div>",
+            unsafe_allow_html=True,
+        )
 
 # ── 右侧：环节详情表格 ──
 with right_col:
