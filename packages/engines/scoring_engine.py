@@ -32,6 +32,7 @@ class ScoreResult:
     benchmarks: Dict = field(default_factory=dict)
     missing_metrics: List[str] = field(default_factory=list)
     message: str = ""
+    qualitative_score: Optional[float] = None
 
 
 def validate_metric(name: str, value: float) -> tuple[bool, str]:
@@ -175,14 +176,32 @@ class ScoringEngine:
                 normalized_weight = vm["metric"]["weight"] / total_weight
                 financial_score += vm["score"] * normalized_weight
 
+        # Load qualitative score
+        qualitative_score = None
+        total_score = round(financial_score, 2)
+        try:
+            from packages.domain.database import get_session
+            from packages.domain.models import QualitativeScore
+            session = get_session()
+            qs = session.query(QualitativeScore).filter_by(stock_code=stock_code).first()
+            session.close()
+            if qs:
+                qualitative_score = round(
+                    (qs.global_ranking + qs.localization_potential + qs.customer_health) / 3 * 0.5, 2
+                )
+                total_score = round(financial_score * 0.7 + qualitative_score * 0.3, 2)
+        except Exception:
+            pass
+
         return ScoreResult(
             stock_code=stock_code,
             report_period=report_period,
-            total_score=round(financial_score, 2),
+            total_score=total_score,
             financial_score=round(financial_score, 2),
             status="OK",
             breakdown=breakdown,
             raw_values=raw_values,
             benchmarks=benchmarks,
             missing_metrics=missing_metrics,
+            qualitative_score=qualitative_score,
         )

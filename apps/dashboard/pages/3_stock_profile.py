@@ -5,6 +5,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 import streamlit as st
 import pandas as pd
 from packages.config.loader import load_stocks
+from packages.domain.database import get_session
+from packages.domain.models import QualitativeScore
 from packages.engines.scoring_engine import ScoringEngine
 from packages.engines.watchlist_manager import WatchlistManager
 from packages.adapters.mock_adapter import MockAdapter
@@ -50,6 +52,29 @@ if result.status == "OK":
     if breakdown_data:
         df = pd.DataFrame(breakdown_data)
         st.dataframe(df, use_container_width=True)
+
+    # Qualitative score
+    if result.qualitative_score is not None:
+        st.subheader("🎯 定性评分")
+        st.metric("定性评分", result.qualitative_score)
+
+        session = get_session()
+        qs = session.query(QualitativeScore).filter_by(stock_code=stock["code"]).first()
+        session.close()
+        if qs:
+            qual_data = []
+            if qs.global_ranking is not None:
+                qual_data.append({"指标": "全球排名", "得分": qs.global_ranking})
+            if qs.localization_potential is not None:
+                qual_data.append({"指标": "国产替代潜力", "得分": qs.localization_potential})
+            if qs.customer_health is not None:
+                qual_data.append({"指标": "客户健康度", "得分": qs.customer_health})
+            if qs.tam_usd_billion is not None:
+                qual_data.append({"指标": "TAM (十亿美元)", "数值": qs.tam_usd_billion})
+            if qs.current_penetration is not None:
+                qual_data.append({"指标": "当前渗透率", "数值": f"{qs.current_penetration:.0%}"})
+            if qual_data:
+                st.dataframe(pd.DataFrame(qual_data), use_container_width=True)
 
     # Action recommendation
     st.subheader("💡 建议行动")
