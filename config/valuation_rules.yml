@@ -1,0 +1,50 @@
+version: "2.0"
+
+valuation_rules:
+  - segment: 光模块
+    metrics:
+      - name: PE_TTM
+        cheap: "<30"
+        fair: "<50"
+        expensive: ">=50"
+      - name: PB
+        cheap: "<3"
+        fair: "<6"
+        expensive: ">=6"
+      - name: PS_TTM
+        cheap: "<4"
+        fair: "<8"
+        expensive: ">=8"
+
+  - segment: 服务器代工
+    metrics:
+      - name: PE_TTM
+        cheap: "<15"
+        fair: "<25"
+        expensive: ">=25"
+      - name: PB
+        cheap: "<1.5"
+        fair: "<3"
+        expensive: ">=3"
+
+  - segment: 减速器
+    metrics:
+      - name: PE_TTM
+        cheap: "<35"
+        fair: "<55"
+        expensive: ">=55"
+      - name: PB
+        cheap: "<2.5"
+        fair: "<5"
+        expensive: ">=5"
+
+  - segment: 默认
+    metrics:
+      - name: PE_TTM
+        cheap: "<20"
+        fair: "<40"
+        expensive: ">=40"
+      - name: PB
+        cheap: "<2"
+        fair: "<4"
+        expensive: ">=4"
