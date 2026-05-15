@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # Add project root to path
@@ -15,12 +16,25 @@ from packages.domain.locks import WorkflowLock, create_backup, list_backups, rol
 from packages.config.loader import load_stocks, save_stocks
 from packages.config.validators import StockConfig
 from packages.engines.scoring_engine import ScoringEngine
+from packages.engines.valuation_engine import ValuationEngine
+from packages.engines.trigger_engine import TriggerEngine
+from packages.engines.report_engine import ReportEngine
 from packages.engines.watchlist_manager import WatchlistManager
 from packages.adapters.akshare_adapter import AKShareAdapter
 from packages.adapters.mock_adapter import MockAdapter
 from packages.adapters.tushare_industry_adapter import TushareIndustryAdapter
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# Setup logging: stdout + rotating file
+LOG_DIR = Path(__file__).parent.parent.parent / "data" / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "stock_kb.log"
+
+handler_file = RotatingFileHandler(LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+handler_file.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+handler_console = logging.StreamHandler()
+handler_console.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+
+logging.basicConfig(level=logging.INFO, handlers=[handler_file, handler_console])
 logger = logging.getLogger(__name__)
 
 
@@ -197,6 +211,58 @@ def cmd_enrich_industry(industry_key: str, dry_run: bool = True):
         logger.info("Use --apply to persist")
 
 
+def cmd_report(stock_code: str = None):
+    """Generate Markdown report for a stock"""
+    cmd_init()
+    report = ReportEngine()
+    stocks = load_stocks()
+
+    targets = [s for s in stocks if stock_code is None or s["code"] == stock_code]
+    if stock_code and not targets:
+        logger.error(f"Stock {stock_code} not found in stocks.yml")
+        sys.exit(1)
+
+    for s in targets:
+        try:
+            md = report.generate(
+                stock_code=s["code"],
+                segment=s["segment"],
+                report_period="2024Q1",
+            )
+            out_path = Path(__file__).parent.parent.parent / "docs" / "stocks" / f"{s['code']}.md"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(md, encoding="utf-8")
+            logger.info(f"Report saved: {out_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate report for {s['code']}: {e}")
+
+
+def cmd_check_triggers():
+    """Run technical trigger detection for all stocks"""
+    cmd_init()
+    try:
+        adapter = AKShareAdapter()
+    except Exception:
+        logger.warning("AKShare not available, using mock data")
+        adapter = MockAdapter("stock_300308_technical")
+
+    engine = TriggerEngine(adapter=adapter)
+    stocks = load_stocks()
+    triggered = 0
+
+    for s in stocks[:50]:  # Limit to avoid rate limits
+        try:
+            result = engine.check(stock_code=s["code"], report_period="2024Q1")
+            if result.triggers:
+                triggered += 1
+                for t in result.triggers:
+                    logger.info(f"{s['code']} {s['name']}: {t['name']} ({t['category']})")
+        except Exception as e:
+            logger.debug(f"Trigger check failed for {s['code']}: {e}")
+
+    logger.info(f"Trigger check completed. {triggered} stocks triggered.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stock KB CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -214,6 +280,11 @@ def main():
     enrich_parser.add_argument("--industry", choices=["ai", "robot"], default="ai", help="Industry to enrich")
     enrich_parser.add_argument("--apply", action="store_true", help="Apply changes to stocks.yml (default: dry-run)")
 
+    report_parser = subparsers.add_parser("report", help="Generate Markdown stock reports")
+    report_parser.add_argument("--stock", help="Specific stock code (default: all)")
+
+    subparsers.add_parser("check-triggers", help="Run technical trigger detection")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -230,6 +301,10 @@ def main():
         cmd_score(args.segment)
     elif args.command == "enrich-industry":
         cmd_enrich_industry(args.industry, dry_run=not args.apply)
+    elif args.command == "report":
+        cmd_report(args.stock)
+    elif args.command == "check-triggers":
+        cmd_check_triggers()
     else:
         parser.print_help()
         sys.exit(1)
