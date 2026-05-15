@@ -102,10 +102,17 @@ if result.status == "OK":
     with right:
         st.subheader("📈 估值矩阵")
         val_data = []
-        for metric, rating in val_result.ratings.items():
+        for metric, rating in val_result.breakdown.items():
             if rating is not None:
                 emoji = {"cheap": "🟢", "fair": "🟡", "expensive": "🔴"}.get(rating, "⚪")
-                val_data.append({"指标": metric.upper(), "评级": f"{emoji} {rating}", "原始值": val_result.raw_values.get(metric, "N/A")})
+                raw = val_result.raw_values.get(metric, "N/A")
+                pct = val_result.percentiles.get(metric)
+                pct_str = f"({pct:.0f}%分位)" if pct is not None else ""
+                val_data.append({
+                    "指标": metric.upper(),
+                    "评级": f"{emoji} {rating}",
+                    "原始值": f"{raw:.1f}x {pct_str}" if isinstance(raw, (int, float)) else raw,
+                })
         if val_data:
             st.dataframe(pd.DataFrame(val_data), width='stretch', hide_index=True)
         else:

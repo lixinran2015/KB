@@ -20,6 +20,7 @@ class ValuationResult:
     overall_rating: Optional[str] = None  # cheap / fair / expensive
     breakdown: Dict[str, Optional[str]] = field(default_factory=dict)
     raw_values: Dict[str, float] = field(default_factory=dict)
+    percentiles: Dict[str, Optional[float]] = field(default_factory=dict)
     missing_metrics: List[str] = field(default_factory=list)
     message: str = ""
 
@@ -40,6 +41,46 @@ def _parse_valuation_threshold(threshold: str, value: float) -> bool:
         target = float(threshold[1:])
         return value < target
     return False
+
+
+def _compute_historical_percentile(stock_code: str, metric_col: str, current_value: float) -> Optional[float]:
+    """Compute historical percentile for a metric from stock_financials table.
+    Returns None if insufficient history (<5 records)."""
+    try:
+        from packages.domain.database import get_session
+        from packages.domain.models import StockFinancial
+        session = get_session()
+        try:
+            history = (
+                session.query(getattr(StockFinancial, metric_col))
+                .filter_by(stock_code=stock_code)
+                .filter(getattr(StockFinancial, metric_col).isnot(None))
+                .order_by(StockFinancial.snapshot_date.desc())
+                .limit(30)
+                .all()
+            )
+            values = [v[0] for v in history if v[0] is not None]
+            if len(values) < 5:
+                return None
+            # Percentile = proportion of historical values <= current
+            below = sum(1 for v in values if v <= current_value)
+            return round(below / len(values) * 100, 1)
+        finally:
+            session.close()
+    except Exception:
+        return None
+
+
+def _rating_from_percentile(percentile: Optional[float]) -> Optional[str]:
+    """Map percentile to rating: <30% cheap, 30-70% fair, >70% expensive."""
+    if percentile is None:
+        return None
+    if percentile < 30:
+        return "cheap"
+    elif percentile > 70:
+        return "expensive"
+    else:
+        return "fair"
 
 
 class ValuationEngine:
@@ -80,6 +121,7 @@ class ValuationEngine:
 
         breakdown: Dict[str, Optional[str]] = {}
         raw_values: Dict[str, float] = {}
+        percentiles: Dict[str, Optional[float]] = {}
         missing_metrics: List[str] = []
         ratings: List[str] = []
 
@@ -91,18 +133,28 @@ class ValuationEngine:
             if pd.isna(value) or value is None:
                 missing_metrics.append(metric_name)
                 breakdown[metric_name] = None
+                percentiles[metric_name] = None
                 continue
 
             raw_values[metric_name] = float(value)
 
-            if _parse_valuation_threshold(metric.get("cheap", ""), float(value)):
-                rating = "cheap"
-            elif _parse_valuation_threshold(metric.get("fair", ""), float(value)):
-                rating = "fair"
-            elif _parse_valuation_threshold(metric.get("expensive", ""), float(value)):
-                rating = "expensive"
+            # Try historical percentile first
+            hist_pct = _compute_historical_percentile(stock_code, col_name, float(value))
+            percentile_rating = _rating_from_percentile(hist_pct)
+            percentiles[metric_name] = hist_pct
+
+            if percentile_rating is not None:
+                rating = percentile_rating
             else:
-                rating = "fair"
+                # Fallback to threshold-based rules
+                if _parse_valuation_threshold(metric.get("cheap", ""), float(value)):
+                    rating = "cheap"
+                elif _parse_valuation_threshold(metric.get("fair", ""), float(value)):
+                    rating = "fair"
+                elif _parse_valuation_threshold(metric.get("expensive", ""), float(value)):
+                    rating = "expensive"
+                else:
+                    rating = "fair"
 
             breakdown[metric_name] = rating
             ratings.append(rating)
@@ -126,5 +178,6 @@ class ValuationEngine:
             overall_rating=overall,
             breakdown=breakdown,
             raw_values=raw_values,
+            percentiles=percentiles,
             missing_metrics=missing_metrics,
         )
