@@ -55,6 +55,96 @@ financial_rules:
         weights: {excellent: ">20", good: ">15", fair: ">10", poor: "<10"}
         weight: 0.10
 
+  - segment: 伺服电机
+    metrics:
+      - name: 毛利率
+        weights: {excellent: ">35", good: ">25", fair: ">15", poor: "<15"}
+        weight: 0.20
+      - name: 净利率
+        weights: {excellent: ">15", good: ">10", fair: ">5", poor: "<5"}
+        weight: 0.10
+      - name: 营收同比增长
+        weights: {excellent: ">40", good: ">25", fair: ">10", poor: "<10"}
+        weight: 0.15
+      - name: 净利润同比增长
+        weights: {excellent: ">50", good: ">30", fair: ">10", poor: "<10"}
+        weight: 0.15
+      - name: ROE
+        weights: {excellent: ">20", good: ">15", fair: ">10", poor: "<10"}
+        weight: 0.10
+
+  - segment: 传感器
+    metrics:
+      - name: 毛利率
+        weights: {excellent: ">40", good: ">30", fair: ">20", poor: "<20"}
+        weight: 0.20
+      - name: 净利率
+        weights: {excellent: ">20", good: ">12", fair: ">6", poor: "<6"}
+        weight: 0.10
+      - name: 营收同比增长
+        weights: {excellent: ">50", good: ">30", fair: ">10", poor: "<10"}
+        weight: 0.15
+      - name: 净利润同比增长
+        weights: {excellent: ">60", good: ">30", fair: ">10", poor: "<10"}
+        weight: 0.15
+      - name: ROE
+        weights: {excellent: ">20", good: ">15", fair: ">10", poor: "<10"}
+        weight: 0.10
+
+  - segment: 整机代工
+    metrics:
+      - name: 毛利率
+        weights: {excellent: ">25", good: ">15", fair: ">8", poor: "<8"}
+        weight: 0.15
+      - name: 净利率
+        weights: {excellent: ">10", good: ">6", fair: ">3", poor: "<3"}
+        weight: 0.10
+      - name: 营收同比增长
+        weights: {excellent: ">40", good: ">20", fair: ">5", poor: "<5"}
+        weight: 0.20
+      - name: 净利润同比增长
+        weights: {excellent: ">40", good: ">20", fair: ">5", poor: "<5"}
+        weight: 0.15
+      - name: ROE
+        weights: {excellent: ">18", good: ">12", fair: ">8", poor: "<8"}
+        weight: 0.10
+
+  - segment: 工业制造
+    metrics:
+      - name: 毛利率
+        weights: {excellent: ">30", good: ">20", fair: ">12", poor: "<12"}
+        weight: 0.20
+      - name: 净利率
+        weights: {excellent: ">15", good: ">10", fair: ">5", poor: "<5"}
+        weight: 0.10
+      - name: 营收同比增长
+        weights: {excellent: ">40", good: ">20", fair: ">5", poor: "<5"}
+        weight: 0.15
+      - name: 净利润同比增长
+        weights: {excellent: ">50", good: ">25", fair: ">5", poor: "<5"}
+        weight: 0.15
+      - name: ROE
+        weights: {excellent: ">20", good: ">15", fair: ">10", poor: "<10"}
+        weight: 0.10
+
+  - segment: 家用服务机器人
+    metrics:
+      - name: 毛利率
+        weights: {excellent: ">35", good: ">25", fair: ">15", poor: "<15"}
+        weight: 0.20
+      - name: 净利率
+        weights: {excellent: ">15", good: ">8", fair: ">3", poor: "<3"}
+        weight: 0.10
+      - name: 营收同比增长
+        weights: {excellent: ">50", good: ">30", fair: ">10", poor: "<10"}
+        weight: 0.15
+      - name: 净利润同比增长
+        weights: {excellent: ">60", good: ">30", fair: ">10", poor: "<10"}
+        weight: 0.15
+      - name: ROE
+        weights: {excellent: ">20", good: ">15", fair: ">8", poor: "<8"}
+        weight: 0.10
+
   - segment: 默认
     metrics:
       - name: 毛利率

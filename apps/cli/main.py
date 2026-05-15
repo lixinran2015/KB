@@ -151,6 +151,10 @@ def cmd_quarterly():
                         missing_metrics=",".join(result.missing_metrics) if result.missing_metrics else None,
                         message=result.message,
                         workflow_run_id=workflow_run_id,
+                        config_version=result.config_version,
+                        data_source_versions=result.data_source_versions,
+                        ranking_in_segment=result.ranking_in_segment,
+                        total_in_segment=result.total_in_segment,
                     )
                     session.add(sr)
                 succeeded += 1

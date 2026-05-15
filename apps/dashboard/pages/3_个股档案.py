@@ -133,7 +133,12 @@ if result.status == "OK":
         st.error("🔴 **回避** — 基本面较弱，建议回避")
 
     # 同环节排名
-    st.caption(f"环节排名: {stock['segment']} | 综合评分: {total}")
+    rank = result.ranking_in_segment
+    total_in_seg = result.total_in_segment
+    if rank and total_in_seg:
+        st.info(f"🏆 **{stock['segment']}** 环节排名: **第 {rank} 名 / 共 {total_in_seg} 只**")
+    else:
+        st.caption(f"环节: {stock['segment']} | 综合评分: {total}")
 
     # ── 分项评分表格 ──
     st.markdown("---")

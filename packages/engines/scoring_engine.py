@@ -33,6 +33,10 @@ class ScoreResult:
     missing_metrics: List[str] = field(default_factory=list)
     message: str = ""
     qualitative_score: Optional[float] = None
+    ranking_in_segment: Optional[int] = None
+    total_in_segment: Optional[int] = None
+    config_version: Optional[str] = None
+    data_source_versions: Optional[str] = None
 
 
 def validate_metric(name: str, value: float) -> tuple[bool, str]:
@@ -193,6 +197,49 @@ class ScoringEngine:
         except Exception:
             pass
 
+        # Compute segment ranking
+        ranking_in_segment = None
+        total_in_segment = None
+        try:
+            from packages.domain.database import get_session
+            from packages.domain.models import ScoreResult as ScoreResultModel
+            session = get_session()
+            try:
+                segment_scores = (
+                    session.query(ScoreResultModel)
+                    .filter_by(report_period=report_period)
+                    .all()
+                )
+                # Filter to same segment by joining with stocks config
+                from packages.config.loader import load_stocks
+                stocks = load_stocks()
+                segment_codes = {s["code"] for s in stocks if s.get("segment") == segment}
+                same_segment_scores = [
+                    sr for sr in segment_scores
+                    if sr.stock_code in segment_codes and sr.total_score is not None
+                ]
+                # Add current score to the list for ranking
+                all_scores = [sr.total_score for sr in same_segment_scores] + [total_score]
+                all_scores = sorted(all_scores, reverse=True)
+                ranking_in_segment = all_scores.index(total_score) + 1
+                total_in_segment = len(all_scores)
+            finally:
+                session.close()
+        except Exception:
+            pass
+
+        # Data lineage
+        config_version = f"scoring_rules.yml:{self.rules.get('version', 'unknown')}"
+        data_source_versions = None
+        if self.adapter:
+            adapter_name = self.adapter.__class__.__name__
+            try:
+                import akshare as ak
+                ak_version = getattr(ak, "__version__", "unknown")
+                data_source_versions = f'{{"{adapter_name}": "{ak_version}"}}'
+            except Exception:
+                data_source_versions = f'{{"{adapter_name}": "unknown"}}'
+
         return ScoreResult(
             stock_code=stock_code,
             report_period=report_period,
@@ -204,4 +251,8 @@ class ScoringEngine:
             benchmarks=benchmarks,
             missing_metrics=missing_metrics,
             qualitative_score=qualitative_score,
+            ranking_in_segment=ranking_in_segment,
+            total_in_segment=total_in_segment,
+            config_version=config_version,
+            data_source_versions=data_source_versions,
         )
