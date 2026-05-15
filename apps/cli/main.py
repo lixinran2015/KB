@@ -458,6 +458,7 @@ def main():
 
     score_parser = subparsers.add_parser("score", help="Run scoring")
     score_parser.add_argument("--segment", help="Filter by segment")
+    score_parser.add_argument("--all", action="store_true", help="Score all stocks (default if no filter)")
 
     enrich_parser = subparsers.add_parser("enrich-industry", help="Fetch stocks from Tushare concept boards")
     enrich_parser.add_argument("--industry", choices=["ai", "robot"], default="ai", help="Industry to enrich")
