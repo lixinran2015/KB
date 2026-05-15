@@ -55,7 +55,7 @@ if result.status == "OK":
 
     if breakdown_data:
         df = pd.DataFrame(breakdown_data)
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width='stretch')
 
     # Qualitative score
     if result.qualitative_score is not None:
@@ -78,7 +78,7 @@ if result.status == "OK":
             if qs.current_penetration is not None:
                 qual_data.append({"指标": "当前渗透率", "数值": f"{qs.current_penetration:.0%}"})
             if qual_data:
-                st.dataframe(pd.DataFrame(qual_data), use_container_width=True)
+                st.dataframe(pd.DataFrame(qual_data), width='stretch')
 
     # Action recommendation
     st.subheader("💡 建议行动")

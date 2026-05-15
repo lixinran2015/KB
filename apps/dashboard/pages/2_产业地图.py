@@ -29,39 +29,52 @@ with st.expander("🔍 智能补充股票数据（Tushare）"):
         st.info("💡 需要 Tushare Token 才能智能补充。设置环境变量 `TUSHARE_TOKEN` 后刷新页面。")
         st.markdown("[去 tushare.pro 注册获取 Token](https://tushare.pro)")
     else:
+        # Initialize session state for enrichment results
+        if "tushare_results" not in st.session_state:
+            st.session_state.tushare_results = None
+        if "tushare_new_entries" not in st.session_state:
+            st.session_state.tushare_new_entries = []
+
         if st.button("🚀 拉取概念板块成分股", type="primary"):
             with st.spinner("正在从 Tushare 获取数据..."):
                 try:
                     from packages.adapters.tushare_industry_adapter import TushareIndustryAdapter
                     adapter = TushareIndustryAdapter(token=token)
                     results = adapter.enrich_industry(industry_key)
-
-                    total = sum(len(v) for v in results.values())
-                    st.success(f"找到 {total} 只股票，分布在 {len(results)} 个环节")
-
-                    for seg_name, stocks in results.items():
-                        with st.container():
-                            st.markdown(f"**{seg_name}** ({len(stocks)}只)")
-                            codes = [s['code'] for s in stocks[:8]]
-                            names = [s['name'] for s in stocks[:8]]
-                            display = [f"{c} {n}" for c, n in zip(codes, names)]
-                            st.caption("、".join(display))
-                            if len(stocks) > 8:
-                                st.caption(f"... 还有 {len(stocks) - 8} 只")
-
-                    # Offer to persist
-                    new_entries = adapter.build_stocks_config(industry_key)
-                    if new_entries:
-                        st.divider()
-                        st.write(f"**{len(new_entries)} 只新股票可保存到股票库**")
-                        if st.button("💾 保存到 stocks.yml", type="secondary"):
-                            merged = all_stocks + new_entries
-                            save_stocks(merged)
-                            st.success(f"已保存 {len(new_entries)} 只新股票！刷新页面后可在各环节查看。")
-                            st.balloons()
+                    st.session_state.tushare_results = results
+                    st.session_state.tushare_new_entries = adapter.build_stocks_config(industry_key)
                 except Exception as e:
                     st.error(f"获取失败: {e}")
                     st.info("可能是网络问题或 Tushare 接口限制，请稍后再试。")
+
+        # Display results if available
+        if st.session_state.tushare_results is not None:
+            results = st.session_state.tushare_results
+            total = sum(len(v) for v in results.values())
+            st.success(f"找到 {total} 只股票，分布在 {len(results)} 个环节")
+
+            for seg_name, stocks in results.items():
+                with st.container():
+                    st.markdown(f"**{seg_name}** ({len(stocks)}只)")
+                    display = [f"{s['code']} {s['name']}" for s in stocks[:8]]
+                    st.caption("、".join(display))
+                    if len(stocks) > 8:
+                        st.caption(f"... 还有 {len(stocks) - 8} 只")
+
+            new_entries = st.session_state.tushare_new_entries
+            if new_entries:
+                st.divider()
+                st.write(f"**{len(new_entries)} 只新股票可保存到股票库**")
+                if st.button("💾 保存到 stocks.yml", type="secondary"):
+                    merged = all_stocks + new_entries
+                    save_stocks(merged)
+                    st.success(f"已保存 {len(new_entries)} 只新股票！刷新页面后可在各环节查看。")
+                    st.balloons()
+                    # Clear session state after save to prevent double-save
+                    st.session_state.tushare_results = None
+                    st.session_state.tushare_new_entries = []
+            else:
+                st.info("没有新的股票需要保存（可能所有股票已在库中）")
 
 labels, parents, values, colors = build_sunburst_data(industry)
 
@@ -79,7 +92,7 @@ fig.update_layout(
     height=600,
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width='stretch')
 
 # Detail table
 st.subheader("📋 环节详情")

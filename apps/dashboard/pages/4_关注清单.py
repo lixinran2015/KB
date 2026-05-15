@@ -54,7 +54,7 @@ else:
                         "环节": s.get("segment", "?"),
                         "状态": item.status,
                     })
-                st.dataframe(data, use_container_width=True)
+                st.dataframe(data, width='stretch')
 
             # Add stock
             available = [f"{s['code']} {s['name']}" for s in stocks]
