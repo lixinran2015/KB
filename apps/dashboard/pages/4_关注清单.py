@@ -10,7 +10,8 @@ from packages.engines.watchlist_manager import WatchlistManager
 from packages.engines.scoring_engine import ScoringEngine
 from packages.engines.valuation_engine import ValuationEngine
 from packages.config.loader import load_stocks
-from packages.domain.database import get_latest_financial
+from packages.domain.database import get_latest_financial, get_session
+from packages.domain.models import ScoreResult
 from packages.adapters.akshare_adapter import AKShareAdapter
 from packages.adapters.mock_adapter import MockAdapter
 
@@ -108,6 +109,23 @@ for i, wl in enumerate(wls):
                 fin = get_latest_financial(item.stock_code)
                 fund_pct = fin.fund_hold_pct if fin else None
 
+                # Score change (last 2 records)
+                score_change = None
+                try:
+                    session = get_session()
+                    hist = (
+                        session.query(ScoreResult)
+                        .filter_by(stock_code=item.stock_code)
+                        .order_by(ScoreResult.scored_at.desc())
+                        .limit(2)
+                        .all()
+                    )
+                    session.close()
+                    if len(hist) == 2 and hist[0].total_score is not None and hist[1].total_score is not None:
+                        score_change = hist[0].total_score - hist[1].total_score
+                except Exception:
+                    pass
+
                 rows.append({
                     "股票代码": item.stock_code,
                     "名称": s.get("name", "?"),
@@ -116,6 +134,7 @@ for i, wl in enumerate(wls):
                     "评分": total_score,
                     "估值": val_rating,
                     "拥挤度": fund_pct,
+                    "变化": score_change,
                 })
 
             df = pd.DataFrame(rows)
@@ -139,6 +158,9 @@ for i, wl in enumerate(wls):
                 )
                 display_df["拥挤度"] = display_df["拥挤度"].apply(
                     lambda x: f"🔴 {x:.1%}" if pd.notna(x) and x > 0.15 else (f"{x:.1%}" if pd.notna(x) else "N/A")
+                )
+                display_df["变化"] = display_df["变化"].apply(
+                    lambda x: f"📈 +{x:.2f}" if pd.notna(x) and x > 0 else (f"📉 {x:.2f}" if pd.notna(x) and x < 0 else ("➖ 0.00" if pd.notna(x) else "N/A"))
                 )
                 st.dataframe(display_df, width='stretch', hide_index=True)
 
