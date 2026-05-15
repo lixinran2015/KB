@@ -12,7 +12,7 @@ load_dotenv()
 
 from packages.domain.database import init_db, DB_PATH
 from packages.domain.locks import WorkflowLock, create_backup, list_backups, rollback_to_backup
-from packages.config.loader import load_stocks
+from packages.config.loader import load_stocks, save_stocks
 from packages.config.validators import StockConfig
 from packages.engines.scoring_engine import ScoringEngine
 from packages.engines.watchlist_manager import WatchlistManager
@@ -175,13 +175,26 @@ def cmd_enrich_industry(industry_key: str, dry_run: bool = True):
 
     if not dry_run:
         new_entries = adapter.build_stocks_config(industry_key)
-        logger.info(f"Would add {len(new_entries)} new stocks to stocks.yml")
+        if not new_entries:
+            logger.info("No new stocks to add")
+            return
+
+        existing = load_stocks()
+        merged = existing + new_entries
+        save_stocks(merged)
+        logger.info(f"Added {len(new_entries)} new stocks to stocks.yml (total: {len(merged)})")
         for e in new_entries[:5]:
             print(f"  + {e['code']} {e['name']} ({e['segment']})")
         if len(new_entries) > 5:
             print(f"  ... 还有 {len(new_entries) - 5} 只")
     else:
-        logger.info("Dry-run mode. Use --apply to add to stocks.yml")
+        new_entries = adapter.build_stocks_config(industry_key)
+        logger.info(f"Dry-run: would add {len(new_entries)} new stocks to stocks.yml")
+        for e in new_entries[:5]:
+            print(f"  + {e['code']} {e['name']} ({e['segment']})")
+        if len(new_entries) > 5:
+            print(f"  ... 还有 {len(new_entries) - 5} 只")
+        logger.info("Use --apply to persist")
 
 
 def main():
