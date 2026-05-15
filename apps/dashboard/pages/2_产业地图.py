@@ -59,6 +59,7 @@ for layer_key in ["upstream", "midstream", "downstream"]:
             "价值链占比": segment.get("value_chain_pct"),
             "国产化率": segment.get("localization_rate"),
             "标的数": stock_count,
+            "描述": segment.get("description", ""),
             "股票列表": ", ".join(
                 [f"{s['code']} {s.get('name', '')}".strip() for s in stocks[:3]]
             ) + (" ..." if stock_count > 3 else "") if stocks else "暂无",
@@ -285,6 +286,8 @@ with right_col:
                     if pd.notna(row["国产化率"]):
                         st.caption(f"国产化: {row['国产化率']:.0%}")
 
+                if row.get("描述"):
+                    st.caption(f"💡 {row['描述']}")
                 if row["股票列表"]:
                     st.caption(f"📌 {row['股票列表']}")
                 st.markdown("---")
