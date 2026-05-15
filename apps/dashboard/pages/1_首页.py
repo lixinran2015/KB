@@ -67,4 +67,26 @@ st.markdown("---")
 
 # Recent triggers
 st.subheader("🔔 最新触发器")
-st.info("触发器功能即将上线")
+from packages.domain.database import get_session
+from packages.domain.models import TriggerEvent
+session = get_session()
+recent_events = session.query(TriggerEvent).order_by(TriggerEvent.created_at.desc()).limit(5).all()
+session.close()
+
+if recent_events:
+    for ev in recent_events:
+        with st.container():
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                st.markdown(f"**{ev.name}**")
+                if ev.description:
+                    st.caption(ev.description[:60] + "..." if len(ev.description or "") > 60 else ev.description)
+            with col2:
+                status_colors = {"watching": "🟡", "triggered": "🔴", "confirmed": "🟢", "expired": "⚪"}
+                st.caption(f"{status_colors.get(ev.status, '⚪')} {ev.status}")
+            with col3:
+                if ev.impact_score:
+                    st.caption(f"影响: {'🔥' * min(ev.impact_score, 5)}")
+        st.markdown("---")
+else:
+    st.info("暂无触发事件，请在触发器中心添加或运行 check-triggers")

@@ -25,7 +25,8 @@ if result.triggers:
         with col2:
             st.caption(t["description"])
         with col3:
-            st.badge(t["category"])
+            category_labels = {"technical": "🔧 技术", "fundamental": "📊 基本面", "event": "📰 事件"}
+            st.caption(category_labels.get(t["category"], t["category"]))
 else:
     st.info("暂无技术面触发事件")
 
