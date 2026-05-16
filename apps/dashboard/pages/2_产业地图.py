@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 import streamlit as st
 import pandas as pd
-from packages.config.loader import load_industry, load_stocks, save_stocks
+from packages.config.loader import load_all_industries, load_industry, load_stocks, save_industry, save_stocks
 from packages.domain.database import get_session
 from packages.domain.models import ScoreResult, StockFinancial, StockIndustryKB, StockConceptRel, ConceptTag
 
@@ -223,10 +223,13 @@ def get_stock_tags(stock_code, segment_stocks):
 
 
 # ── 获取所有产业配置 ──
-INDUSTRIES = [
-    {"key": "ai", "name": "人工智能", "icon": "🤖"},
-    {"key": "robot", "name": "机器人", "icon": "🔧"},
-]
+INDUSTRIES = load_all_industries()
+# 如果没有配置文件，显示默认的两个产业
+if not INDUSTRIES:
+    INDUSTRIES = [
+        {"key": "ai", "name": "人工智能", "icon": "🤖"},
+        {"key": "robot", "name": "机器人", "icon": "🔧"},
+    ]
 
 LAYER_COLORS = {
     "upstream": "#3b82f6",
@@ -270,6 +273,11 @@ if st.session_state.industry_view == "list":
                     st.session_state.industry_view = "detail"
                     st.session_state.selected_industry_key = ind["key"]
                     st.rerun()
+
+    st.divider()
+    if st.button("➕ 添加产业", key="btn_add_industry", type="secondary"):
+        st.session_state.industry_view = "add_industry"
+        st.rerun()
 
 
 # ═══════════════════════════════════════════════════════
@@ -489,3 +497,210 @@ elif st.session_state.industry_view == "stocks":
                             st.caption(f"**{seg_name_t}** ({len(stocks_t)}只)")
                     except Exception as e:
                         st.error(f"获取失败: {e}")
+
+
+# ═══════════════════════════════════════════════════════
+# 视图 4：添加产业（自动生成 + DeepSeek 核对）
+# ═══════════════════════════════════════════════════════
+elif st.session_state.industry_view == "add_industry":
+    st.title("➕ 添加产业")
+    st.caption("输入产业名称，系统自动分析股票数据并生成产业链地图")
+
+    # 返回按钮
+    if st.button("⬅️ 返回列表", use_container_width=True):
+        st.session_state.industry_view = "list"
+        # 清除生成状态
+        for key in ["gen_industry_name", "gen_structure", "gen_stocks", "gen_verify_result", "gen_stocks_entries"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
+
+    st.markdown("---")
+
+    # ── 输入阶段 ──
+    industry_name = st.text_input("产业名称", placeholder="例如：新能源、半导体、生物医药")
+
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        generate_btn = st.button("🚀 自动生成产业地图", type="primary", use_container_width=True)
+
+    # ── 生成阶段 ──
+    if generate_btn and industry_name:
+        from packages.adapters.industry_generator import IndustryGenerator
+
+        gen = IndustryGenerator()
+        try:
+            with st.spinner("正在分析股票数据..."):
+                stocks = gen.collect_stocks(industry_name)
+                if not stocks:
+                    st.warning(f"未找到与「{industry_name}」相关的股票，请尝试其他名称。")
+                else:
+                    st.success(f"找到 {len(stocks)} 只相关股票")
+                    structure = gen.auto_structure(stocks, industry_name=industry_name)
+
+                    # 保存到 session state
+                    st.session_state.gen_industry_name = industry_name
+                    st.session_state.gen_structure = structure
+                    st.session_state.gen_stocks = stocks
+
+                    # DeepSeek 核对
+                    with st.spinner("正在请 DeepSeek AI 核对..."):
+                        verify_result = gen.verify_with_deepseek(industry_name, structure)
+                        st.session_state.gen_verify_result = verify_result
+
+                    # 生成 stocks.yml 条目
+                    config, stocks_entries = gen.generate_config(industry_name, structure, stocks)
+                    st.session_state.gen_stocks_entries = stocks_entries
+                    st.session_state.gen_config = config
+
+                    st.rerun()
+        finally:
+            gen.close()
+
+    # ── 展示阶段 ──
+    if "gen_structure" in st.session_state and st.session_state.gen_structure:
+        industry_name = st.session_state.gen_industry_name
+        structure = st.session_state.gen_structure
+        verify_result = st.session_state.get("gen_verify_result")
+        stocks_entries = st.session_state.get("gen_stocks_entries", [])
+        config = st.session_state.get("gen_config", {})
+
+        st.markdown(f"### 📊 自动生成结果：{industry_name}")
+
+        # AI 评分
+        if verify_result:
+            score = verify_result.get("overall_score", 0)
+            score_color = "#10b981" if score >= 7 else "#f59e0b" if score >= 5 else "#ef4444"
+            st.markdown(
+                f"**DeepSeek AI 评分：** <span style='color:{score_color};font-size:24px;font-weight:bold'>{score}/10</span>",
+                unsafe_allow_html=True,
+            )
+
+            # Issues
+            issues = verify_result.get("issues", [])
+            if issues:
+                with st.expander("📋 AI 评估详情"):
+                    for issue in issues:
+                        severity = issue.get("severity", "medium")
+                        icon = "🔴" if severity == "high" else "🟡" if severity == "medium" else "🟢"
+                        st.markdown(f"{icon} **{issue.get('description', '')}**")
+                        st.caption(f"💡 建议：{issue.get('suggestion', '')}")
+
+        # 结构对比
+        st.markdown("#### 产业结构")
+        col_orig, col_improved = st.columns(2)
+
+        with col_orig:
+            st.markdown("**🤖 原始结构**")
+            for layer_key in ["upstream", "midstream", "downstream"]:
+                layer = structure.get(layer_key, {})
+                if layer.get("segments"):
+                    layer_label = {"upstream": "上游", "midstream": "中游", "downstream": "下游"}.get(layer_key, layer_key)
+                    st.markdown(f"**{layer_label}：** {layer.get('name', layer_label)}")
+                    for seg in layer["segments"]:
+                        st.caption(f"  • {seg['name']} — {seg.get('description', '')}")
+
+        with col_improved:
+            st.markdown("**🧠 AI 建议结构**")
+            if verify_result and verify_result.get("improved_structure"):
+                improved = verify_result["improved_structure"]
+                for layer_key in ["upstream", "midstream", "downstream"]:
+                    layer = improved.get(layer_key, {})
+                    if layer.get("segments"):
+                        layer_label = {"upstream": "上游", "midstream": "中游", "downstream": "下游"}.get(layer_key, layer_key)
+                        st.markdown(f"**{layer_label}：** {layer.get('name', layer_label)}")
+                        for seg in layer["segments"]:
+                            st.caption(f"  • {seg['name']} — {seg.get('description', '')}")
+            else:
+                st.caption("AI 未提供改进建议")
+
+        # 股票预览
+        st.markdown("---")
+        st.markdown(f"**📈 预计写入 {len(stocks_entries)} 只股票到 stocks.yml**")
+        with st.expander("预览股票列表"):
+            preview_df = pd.DataFrame([
+                {"代码": s["code"], "名称": s["name"], "环节": s["segment"]}
+                for s in stocks_entries[:50]
+            ])
+            st.dataframe(preview_df, use_container_width=True)
+            if len(stocks_entries) > 50:
+                st.caption(f"... 共 {len(stocks_entries)} 只，显示前 50 只")
+
+        # 选择采用的结构
+        st.markdown("---")
+        st.markdown("### ✅ 确认保存")
+
+        use_structure = st.radio(
+            "选择采用的结构",
+            ["原始结构", "AI 建议结构"] if (verify_result and verify_result.get("improved_structure")) else ["原始结构"],
+            horizontal=True,
+        )
+
+        # 检查是否已存在
+        industry_dir = Path(__file__).parent.parent.parent.parent / "config" / "industries"
+        existing_file = industry_dir / f"{industry_name}.yml"
+        if existing_file.exists():
+            st.warning(f"⚠️ 产业「{industry_name}」已存在，保存将覆盖原有配置。")
+
+        if st.button("💾 确认并保存", type="primary"):
+            # 确定最终结构
+            final_structure = structure
+            if use_structure == "AI 建议结构" and verify_result:
+                final_structure = verify_result.get("improved_structure", structure)
+
+            # ── 同步 segment 名称映射（按层级独立） ──
+            # 如果 AI 建议结构修改了 segment 名称，需要同步更新 stocks_entries 中的 segment 字段
+            # 否则产业地图页面按 AI segment 名称查找 stocks.yml 会找不到股票
+            # 使用 (layer, segment_name) 作为 key 避免跨层级覆盖
+            rename_map = {}
+            if use_structure == "AI 建议结构" and verify_result:
+                for layer in ["upstream", "midstream", "downstream"]:
+                    orig_segs = [s["name"] for s in structure.get(layer, {}).get("segments", [])]
+                    ai_segs = [s["name"] for s in final_structure.get(layer, {}).get("segments", [])]
+                    for i in range(min(len(orig_segs), len(ai_segs))):
+                        if orig_segs[i] != ai_segs[i]:
+                            rename_map[(layer, orig_segs[i])] = ai_segs[i]
+
+            # 应用映射到 stocks_entries
+            synced_entries = []
+            for entry in stocks_entries:
+                new_entry = dict(entry)
+                layer = new_entry.pop("_layer", "")
+                key = (layer, new_entry["segment"])
+                if key in rename_map:
+                    new_entry["segment"] = rename_map[key]
+                synced_entries.append(new_entry)
+
+            # 组装最终配置
+            final_config = {
+                "name": industry_name,
+                "upstream": final_structure.get("upstream", {"name": "上游", "segments": []}),
+                "midstream": final_structure.get("midstream", {"name": "中游", "segments": []}),
+                "downstream": final_structure.get("downstream", {"name": "下游", "segments": []}),
+            }
+
+            try:
+                # 1. 保存产业配置文件
+                save_industry(industry_name, final_config)
+
+                # 2. 追加股票到 stocks.yml
+                existing_stocks = load_stocks()
+                existing_codes = {s["code"] for s in existing_stocks}
+                new_entries = [s for s in synced_entries if s["code"] not in existing_codes]
+                all_stocks = existing_stocks + new_entries
+                save_stocks(all_stocks)
+
+                st.success(f"✅ 产业「{industry_name}」已保存！")
+                st.info(f"📁 配置文件：config/industries/{industry_name}.yml")
+                st.info(f"📈 新增 {len(new_entries)} 只股票到 stocks.yml")
+
+                # 3. 清除 session state 并返回列表
+                for key in ["gen_industry_name", "gen_structure", "gen_stocks", "gen_verify_result", "gen_stocks_entries", "gen_config"]:
+                    if key in st.session_state:
+                        del st.session_state[key]
+
+                st.session_state.industry_view = "list"
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"保存失败：{e}")
